@@ -1,0 +1,124 @@
+package com.wenshu.writing.ui.navigation
+
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.navigation.NavController
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.wenshu.writing.di.AppContainer
+import com.wenshu.writing.feature.ai.AiChatScreen
+import com.wenshu.writing.feature.editor.ChapterEditorScreen
+import com.wenshu.writing.feature.library.LibraryScreen
+import com.wenshu.writing.feature.settings.SettingsScreen
+import com.wenshu.writing.feature.works.ChapterListScreen
+import com.wenshu.writing.feature.works.WorksScreen
+
+@Composable
+fun AppNavHost(container: AppContainer) {
+    val navController = rememberNavController()
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = backStackEntry?.destination?.route
+    val showBottomBar = topLevelDestinations.any { it.route == currentRoute }
+
+    Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        bottomBar = {
+            if (showBottomBar) {
+                AppBottomBar(
+                    currentRoute = currentRoute,
+                    navController = navController
+                )
+            }
+        }
+    ) { innerPadding ->
+        NavHost(
+            navController = navController,
+            startDestination = Routes.WORKS,
+            modifier = Modifier.padding(innerPadding)
+        ) {
+            composable(Routes.WORKS) {
+                WorksScreen(
+                    container = container,
+                    onOpenNovel = { novelId ->
+                        navController.navigate(Routes.chapterList(novelId))
+                    }
+                )
+            }
+            composable(Routes.LIBRARY) {
+                LibraryScreen(container = container)
+            }
+            composable(Routes.AI) {
+                AiChatScreen(container = container)
+            }
+            composable(Routes.SETTINGS) {
+                SettingsScreen(container = container)
+            }
+            composable(
+                route = Routes.CHAPTER_LIST,
+                arguments = listOf(navArgument("novelId") { type = NavType.LongType })
+            ) { entry ->
+                ChapterListScreen(
+                    container = container,
+                    novelId = entry.arguments?.getLong("novelId") ?: 0L,
+                    onBack = { navController.popBackStack() },
+                    onOpenChapter = { chapterId ->
+                        navController.navigate(Routes.chapterEditor(chapterId))
+                    }
+                )
+            }
+            composable(
+                route = Routes.CHAPTER_EDITOR,
+                arguments = listOf(navArgument("chapterId") { type = NavType.LongType })
+            ) { entry ->
+                ChapterEditorScreen(
+                    container = container,
+                    chapterId = entry.arguments?.getLong("chapterId") ?: 0L,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppBottomBar(
+    currentRoute: String?,
+    navController: NavController
+) {
+    NavigationBar {
+        topLevelDestinations.forEach { destination ->
+            NavigationBarItem(
+                selected = currentRoute == destination.route,
+                onClick = {
+                    navController.navigate(destination.route) {
+                        popUpTo(navController.graph.findStartDestination().id) {
+                            saveState = true
+                        }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                },
+                icon = {
+                    Icon(
+                        imageVector = destination.icon,
+                        contentDescription = destination.label
+                    )
+                },
+                label = { Text(destination.label) }
+            )
+        }
+    }
+}
