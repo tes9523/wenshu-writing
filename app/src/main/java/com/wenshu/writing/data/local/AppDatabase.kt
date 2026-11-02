@@ -4,11 +4,14 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.wenshu.writing.data.local.dao.ChapterDao
 import com.wenshu.writing.data.local.dao.LibraryDao
 import com.wenshu.writing.data.local.dao.NovelDao
 import com.wenshu.writing.data.local.dao.SettingsDao
 import com.wenshu.writing.data.local.entity.AiConfigEntity
+import com.wenshu.writing.data.local.entity.AiProfileEntity
 import com.wenshu.writing.data.local.entity.AppSettingsEntity
 import com.wenshu.writing.data.local.entity.ChapterEntity
 import com.wenshu.writing.data.local.entity.CharacterEntity
@@ -22,9 +25,10 @@ import com.wenshu.writing.data.local.entity.WorldSettingEntity
         CharacterEntity::class,
         WorldSettingEntity::class,
         AiConfigEntity::class,
+        AiProfileEntity::class,
         AppSettingsEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -37,6 +41,35 @@ abstract class AppDatabase : RoomDatabase() {
     companion object {
         private const val DATABASE_NAME = "wenshu_writing.db"
 
+        /** 1.0.0 -> 1.0.1：新增多套 API 配置表，历史单条配置自动迁移为「默认配置」。 */
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `ai_profiles` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`baseUrl` TEXT NOT NULL, " +
+                        "`apiKey` TEXT NOT NULL, " +
+                        "`model` TEXT NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "ALTER TABLE `app_settings` ADD COLUMN `activeAiProfileId` " +
+                        "INTEGER NOT NULL DEFAULT -1"
+                )
+                db.execSQL(
+                    "INSERT INTO `ai_profiles` (`name`, `baseUrl`, `apiKey`, `model`, `updatedAt`) " +
+                        "SELECT '默认配置', `baseUrl`, `apiKey`, `model`, 0 FROM `ai_config` " +
+                        "WHERE `id` = 0 AND `apiKey` <> ''"
+                )
+                db.execSQL(
+                    "UPDATE `app_settings` SET `activeAiProfileId` = " +
+                        "(SELECT `id` FROM `ai_profiles` ORDER BY `id` LIMIT 1) " +
+                        "WHERE `id` = 0 AND `activeAiProfileId` = -1"
+                )
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -46,7 +79,10 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     DATABASE_NAME
-                ).build().also { instance = it }
+                )
+                    .addMigrations(MIGRATION_1_2)
+                    .build()
+                    .also { instance = it }
             }
     }
 }

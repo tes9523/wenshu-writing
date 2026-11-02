@@ -63,12 +63,35 @@ data class AiConfig(
     }
 }
 
+/** 一套可命名的 OpenAI 兼容 API 配置，用于多方案存档与一键切换 */
+data class AiProfile(
+    val id: Long = 0L,
+    val name: String = "",
+    val baseUrl: String = AiConfig.DEFAULT_BASE_URL,
+    val apiKey: String = "",
+    val model: String = AiConfig.DEFAULT_MODEL,
+    val updatedAt: Long = 0L
+)
+
+/** API 连通状态，对应界面中的绿 / 红 / 黄 / 灰提示 */
+enum class ApiConnStatus {
+    UNVERIFIED, CHECKING, SUCCESS, FAILURE, TIMEOUT
+}
+
+/** 一次连通探测的结果，携带可用于下拉选择的模型列表 */
+data class ApiProbeOutcome(
+    val status: ApiConnStatus,
+    val message: String,
+    val models: List<String> = emptyList()
+)
+
 enum class ThemeMode {
     SYSTEM, LIGHT, DARK
 }
 
 data class AppSettings(
-    val themeMode: ThemeMode = ThemeMode.SYSTEM
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val activeAiProfileId: Long = -1L
 )
 
 enum class ChatRole {

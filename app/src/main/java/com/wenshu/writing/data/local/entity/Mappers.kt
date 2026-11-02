@@ -1,6 +1,7 @@
 package com.wenshu.writing.data.local.entity
 
 import com.wenshu.writing.domain.model.AiConfig
+import com.wenshu.writing.domain.model.AiProfile
 import com.wenshu.writing.domain.model.CharacterCard
 import com.wenshu.writing.domain.model.Chapter
 import com.wenshu.writing.domain.model.Novel
@@ -52,4 +53,22 @@ fun AiConfig.toEntity() = AiConfigEntity(
     baseUrl = baseUrl,
     apiKey = apiKey,
     model = model
+)
+
+fun AiProfileEntity.toModel() = AiProfile(
+    id = id,
+    name = name,
+    baseUrl = baseUrl,
+    apiKey = apiKey,
+    model = model,
+    updatedAt = updatedAt
+)
+
+fun AiProfile.toEntity() = AiProfileEntity(
+    id = id,
+    name = name,
+    baseUrl = baseUrl,
+    apiKey = apiKey,
+    model = model,
+    updatedAt = updatedAt
 )

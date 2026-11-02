@@ -1,5 +1,6 @@
 package com.wenshu.writing.data.local.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -64,8 +65,19 @@ data class AiConfigEntity(
     val model: String
 )
 
+@Entity(tableName = "ai_profiles")
+data class AiProfileEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val name: String,
+    val baseUrl: String,
+    val apiKey: String,
+    val model: String,
+    val updatedAt: Long = 0L
+)
+
 @Entity(tableName = "app_settings")
 data class AppSettingsEntity(
     @PrimaryKey val id: Int = 0,
-    val themeMode: String = "SYSTEM"
+    val themeMode: String = "SYSTEM",
+    @ColumnInfo(defaultValue = "-1") val activeAiProfileId: Long = -1L
 )
