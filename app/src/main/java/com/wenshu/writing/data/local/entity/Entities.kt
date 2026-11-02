@@ -72,6 +72,8 @@ data class AiProfileEntity(
     val baseUrl: String,
     val apiKey: String,
     val model: String,
+    @ColumnInfo(defaultValue = "OPENAI") val apiType: String = "OPENAI",
+    @ColumnInfo(defaultValue = "") val models: String = "",
     val updatedAt: Long = 0L
 )
 

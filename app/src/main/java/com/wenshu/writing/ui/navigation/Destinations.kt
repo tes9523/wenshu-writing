@@ -13,6 +13,8 @@ object Routes {
     const val AI = "ai"
     const val SETTINGS = "settings"
 
+    const val AI_PROVIDERS = "ai_providers"
+
     const val CHAPTER_LIST = "novel/{novelId}/chapters"
     const val CHAPTER_EDITOR = "chapter/{chapterId}"
 

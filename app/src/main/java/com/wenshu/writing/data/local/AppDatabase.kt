@@ -28,7 +28,7 @@ import com.wenshu.writing.data.local.entity.WorldSettingEntity
         AiProfileEntity::class,
         AppSettingsEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -70,6 +70,20 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** 1.0.1 -> 1.0.2：提供商新增接口类型与独立模型缓存，不影响书稿与设定库数据。 */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `ai_profiles` ADD COLUMN `apiType` " +
+                        "TEXT NOT NULL DEFAULT 'OPENAI'"
+                )
+                db.execSQL(
+                    "ALTER TABLE `ai_profiles` ADD COLUMN `models` " +
+                        "TEXT NOT NULL DEFAULT ''"
+                )
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -80,7 +94,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     DATABASE_NAME
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { instance = it }
             }

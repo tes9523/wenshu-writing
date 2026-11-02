@@ -42,11 +42,18 @@ data class WorldSetting(
     val updatedAt: Long = 0L
 )
 
-/** OpenAI 兼容 API 配置 */
+/** AI 接口类型：OpenAI 兼容规范 / Anthropic Messages 规范 */
+enum class ApiProviderType(val label: String) {
+    OPENAI("OpenAI"),
+    ANTHROPIC("Anthropic")
+}
+
+/** AI 接口配置 */
 data class AiConfig(
     val baseUrl: String = DEFAULT_BASE_URL,
     val apiKey: String = "",
-    val model: String = DEFAULT_MODEL
+    val model: String = DEFAULT_MODEL,
+    val apiType: ApiProviderType = ApiProviderType.OPENAI
 ) {
     companion object {
         const val DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -63,13 +70,15 @@ data class AiConfig(
     }
 }
 
-/** 一套可命名的 OpenAI 兼容 API 配置，用于多方案存档与一键切换 */
+/** 一套可命名的 AI 提供商配置，用于多方案存档与一键切换 */
 data class AiProfile(
     val id: Long = 0L,
     val name: String = "",
     val baseUrl: String = AiConfig.DEFAULT_BASE_URL,
     val apiKey: String = "",
     val model: String = AiConfig.DEFAULT_MODEL,
+    val apiType: ApiProviderType = ApiProviderType.OPENAI,
+    val models: List<String> = emptyList(),
     val updatedAt: Long = 0L
 )
 

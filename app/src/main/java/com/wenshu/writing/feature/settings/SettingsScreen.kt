@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.AutoStories
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,7 +38,10 @@ import com.wenshu.writing.domain.model.ThemeMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(container: AppContainer) {
+fun SettingsScreen(
+    container: AppContainer,
+    onOpenAiProviders: () -> Unit
+) {
     val viewModel: SettingsViewModel = viewModel(
         factory = SettingsViewModel.factory(container.preferencesRepository)
     )
@@ -95,23 +100,52 @@ fun SettingsScreen(container: AppContainer) {
             }
             item {
                 Card(
+                    onClick = onOpenAiProviders,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Tune,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "AI 提供商",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "管理 OpenAI / Anthropic 接口、密钥与模型，支持多套配置一键切换。",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            item {
+                Card(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surface
                     ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "API 配置",
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "OpenAI 兼容的地址、Key 与模型在「AI 对话」页配置，并保存于本机。",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.height(12.dp))
                         Text(
                             text = "本地存储",
                             style = MaterialTheme.typography.titleSmall
@@ -155,7 +189,7 @@ fun SettingsScreen(container: AppContainer) {
                             )
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                text = "版本 1.0.1 · 本地优先的长篇小说写作工具",
+                                text = "版本 1.0.2 · 本地优先的长篇小说写作工具",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

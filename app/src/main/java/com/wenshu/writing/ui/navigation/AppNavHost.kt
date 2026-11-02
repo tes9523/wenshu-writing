@@ -20,6 +20,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.wenshu.writing.di.AppContainer
 import com.wenshu.writing.feature.ai.AiChatScreen
+import com.wenshu.writing.feature.ai.AiProviderScreen
 import com.wenshu.writing.feature.editor.ChapterEditorScreen
 import com.wenshu.writing.feature.library.LibraryScreen
 import com.wenshu.writing.feature.settings.SettingsScreen
@@ -61,10 +62,30 @@ fun AppNavHost(container: AppContainer) {
                 LibraryScreen(container = container)
             }
             composable(Routes.AI) {
-                AiChatScreen(container = container)
+                AiChatScreen(
+                    container = container,
+                    onOpenProviders = {
+                        navController.navigate(Routes.AI_PROVIDERS) {
+                            launchSingleTop = true
+                        }
+                    }
+                )
             }
             composable(Routes.SETTINGS) {
-                SettingsScreen(container = container)
+                SettingsScreen(
+                    container = container,
+                    onOpenAiProviders = {
+                        navController.navigate(Routes.AI_PROVIDERS) {
+                            launchSingleTop = true
+                        }
+                    }
+                )
+            }
+            composable(Routes.AI_PROVIDERS) {
+                AiProviderScreen(
+                    container = container,
+                    onBack = { navController.popBackStack() }
+                )
             }
             composable(
                 route = Routes.CHAPTER_LIST,

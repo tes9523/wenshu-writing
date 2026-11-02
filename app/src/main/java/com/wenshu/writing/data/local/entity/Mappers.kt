@@ -2,6 +2,7 @@ package com.wenshu.writing.data.local.entity
 
 import com.wenshu.writing.domain.model.AiConfig
 import com.wenshu.writing.domain.model.AiProfile
+import com.wenshu.writing.domain.model.ApiProviderType
 import com.wenshu.writing.domain.model.CharacterCard
 import com.wenshu.writing.domain.model.Chapter
 import com.wenshu.writing.domain.model.Novel
@@ -61,6 +62,8 @@ fun AiProfileEntity.toModel() = AiProfile(
     baseUrl = baseUrl,
     apiKey = apiKey,
     model = model,
+    apiType = runCatching { ApiProviderType.valueOf(apiType) }.getOrDefault(ApiProviderType.OPENAI),
+    models = decodeModels(models),
     updatedAt = updatedAt
 )
 
@@ -70,5 +73,14 @@ fun AiProfile.toEntity() = AiProfileEntity(
     baseUrl = baseUrl,
     apiKey = apiKey,
     model = model,
+    apiType = apiType.name,
+    models = encodeModels(models),
     updatedAt = updatedAt
 )
+
+/** 模型缓存以换行分隔存储，避免额外的 JSON 依赖与转义问题。 */
+private fun decodeModels(raw: String): List<String> =
+    raw.split('\n').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+
+private fun encodeModels(models: List<String>): String =
+    models.map { it.trim() }.filter { it.isNotEmpty() }.distinct().joinToString("\n")

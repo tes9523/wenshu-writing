@@ -14,15 +14,29 @@ android {
         applicationId = "com.wenshu.writing"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 3
+        versionName = "1.0.2"
 
         vectorDrawables {
             useSupportLibrary = true
         }
     }
 
+    signingConfigs {
+        // 固定 debug 签名：保证后续每个版本签名一致，可覆盖升级并保留本地书稿数据。
+        // 该 keystore 随仓库提交，密码内置，仅用于 debug 测试包。
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "wenshu_debug_2026"
+            keyAlias = "androiddebugkey"
+            keyPassword = "wenshu_debug_2026"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
