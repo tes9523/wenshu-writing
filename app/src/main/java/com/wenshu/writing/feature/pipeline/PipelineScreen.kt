@@ -65,7 +65,7 @@ fun PipelineScreen(
             novelRepository = container.novelRepository,
             skillRepository = container.skillRepository,
             pipelineRepository = container.pipelineRepository,
-            libraryRepository = container.libraryRepository,
+            settingRepository = container.settingRepository,
             preferencesRepository = container.preferencesRepository,
             chatRepository = container.chatRepository,
             aiClient = container.aiClient

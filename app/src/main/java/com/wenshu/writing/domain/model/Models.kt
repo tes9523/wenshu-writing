@@ -22,27 +22,33 @@ data class Chapter(
     val wordCount: Int get() = countCharacters(content)
 }
 
-/** 人物卡。bookId 为 null 表示全局公共素材，不参与任何单本书稿的自动读写。 */
-data class CharacterCard(
+/**
+ * 统一设定条目。1.0.6 起人物、世界观、大纲与所有自定义分类共用此模型。
+ * category 固定内置：人物 / 世界观 / 大纲；其余为用户自定义分类。
+ * bookId 为 null 表示全局公共素材，不参与任何单本书稿的自动读写。
+ */
+data class Setting(
     val id: Long = 0L,
-    val name: String,
-    val role: String = "",
-    val description: String = "",
     val bookId: Long? = null,
-    val createdAt: Long = 0L,
-    val updatedAt: Long = 0L
-)
-
-/** 世界观设定。bookId 为 null 表示全局公共素材。 */
-data class WorldSetting(
-    val id: Long = 0L,
-    val category: String = "",
+    val category: String,
     val title: String,
+    /** 人物卡的「身份/定位」等短标签；其他分类可为空。 */
+    val subtitle: String? = null,
     val content: String = "",
-    val bookId: Long? = null,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L
-)
+) {
+    val displayTitle: String get() = title.ifBlank { "未命名" }
+}
+
+/** 1.0.6 起设定库三大内置分类，禁止删除、禁止改名。 */
+object SettingCategories {
+    const val CHARACTER = "人物"
+    const val WORLD = "世界观"
+    const val OUTLINE = "大纲"
+    val BUILT_IN = listOf(CHARACTER, WORLD, OUTLINE)
+    fun isBuiltIn(category: String): Boolean = BUILT_IN.contains(category)
+}
 
 /** AI 接口类型：OpenAI 兼容规范 / Anthropic Messages 规范 */
 enum class ApiProviderType(val label: String) {
@@ -188,17 +194,6 @@ data class ChatSession(
     val id: Long = 0L,
     val title: String = "新对话",
     val bookId: Long? = null,
-    val createdAt: Long = 0L,
-    val updatedAt: Long = 0L
-)
-
-/** 书稿大纲（全书总纲 / 细纲）。 */
-data class Outline(
-    val id: Long = 0L,
-    val novelId: Long = 0L,
-    val title: String = "",
-    val content: String = "",
-    val kind: String = "outline",
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L
 )

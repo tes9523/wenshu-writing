@@ -71,7 +71,7 @@ fun WorksScreen(
     val viewModel: WorksViewModel = viewModel(
         factory = WorksViewModel.factory(
             repository = container.novelRepository,
-            libraryRepository = container.libraryRepository,
+            settingRepository = container.settingRepository,
             memoRepository = container.memoRepository,
             preferencesRepository = container.preferencesRepository
         )

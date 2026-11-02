@@ -4,10 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.wenshu.writing.data.repository.BookArchive
-import com.wenshu.writing.data.repository.LibraryRepository
 import com.wenshu.writing.data.repository.MemoRepository
 import com.wenshu.writing.data.repository.NovelRepository
 import com.wenshu.writing.data.repository.PreferencesRepository
+import com.wenshu.writing.data.repository.SettingRepository
 import com.wenshu.writing.domain.model.Chapter
 import com.wenshu.writing.domain.model.Novel
 import kotlinx.coroutines.Dispatchers
@@ -29,7 +29,7 @@ data class WorksUiState(
 
 class WorksViewModel(
     private val repository: NovelRepository,
-    private val libraryRepository: LibraryRepository,
+    private val settingRepository: SettingRepository,
     private val memoRepository: MemoRepository,
     private val preferencesRepository: PreferencesRepository
 ) : ViewModel() {
@@ -62,7 +62,7 @@ class WorksViewModel(
         }
     }
 
-    /** 导出整书数据包：本书全部章节、人物卡、世界观与备忘录。 */
+    /** 导出整书数据包：本书全部章节、设定与备忘录。 */
     fun exportBook(
         novelId: Long,
         output: OutputStream,
@@ -74,10 +74,9 @@ class WorksViewModel(
                     val novel = repository.getNovel(novelId)
                         ?: throw IllegalArgumentException("书稿不存在")
                     val chapters = repository.observeChapters(novelId).first()
-                    val characters = libraryRepository.getCharacters(novelId)
-                    val worlds = libraryRepository.getWorldSettings(novelId)
+                    val settings = settingRepository.getAll(novelId)
                     val memos = memoRepository.getNotes(novelId)
-                    BookArchive.write(output, novel, chapters, characters, worlds, memos)
+                    BookArchive.write(output, novel, chapters, settings, memos)
                 }
             }
             onResult(result)
@@ -100,11 +99,14 @@ class WorksViewModel(
                             repository.saveChapter(id, chapter.title, chapter.content)
                         }
                     }
-                    data.characters.forEach {
-                        libraryRepository.addCharacter(it.name, it.role, it.description, novelId)
-                    }
-                    data.worldSettings.forEach {
-                        libraryRepository.addWorldSetting(it.category, it.title, it.content, novelId)
+                    data.settings.forEach {
+                        settingRepository.addSetting(
+                            category = it.category,
+                            title = it.title,
+                            subtitle = it.subtitle,
+                            content = it.content,
+                            bookId = novelId
+                        )
                     }
                     memoRepository.addNotes(data.memos, novelId)
                     preferencesRepository.setActiveNovel(novelId)
@@ -118,7 +120,7 @@ class WorksViewModel(
     companion object {
         fun factory(
             repository: NovelRepository,
-            libraryRepository: LibraryRepository,
+            settingRepository: SettingRepository,
             memoRepository: MemoRepository,
             preferencesRepository: PreferencesRepository
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
@@ -126,7 +128,7 @@ class WorksViewModel(
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
                 WorksViewModel(
                     repository,
-                    libraryRepository,
+                    settingRepository,
                     memoRepository,
                     preferencesRepository
                 ) as T

@@ -3,7 +3,6 @@ package com.wenshu.writing.data.local.entity
 import com.wenshu.writing.domain.model.AiConfig
 import com.wenshu.writing.domain.model.AiProfile
 import com.wenshu.writing.domain.model.ApiProviderType
-import com.wenshu.writing.domain.model.CharacterCard
 import com.wenshu.writing.domain.model.Chapter
 import com.wenshu.writing.domain.model.ChapterTask
 import com.wenshu.writing.domain.model.ChatMessage
@@ -11,12 +10,11 @@ import com.wenshu.writing.domain.model.ChatRole
 import com.wenshu.writing.domain.model.ChatSession
 import com.wenshu.writing.domain.model.MemoNote
 import com.wenshu.writing.domain.model.Novel
-import com.wenshu.writing.domain.model.Outline
 import com.wenshu.writing.domain.model.PipelineRun
 import com.wenshu.writing.domain.model.PipelineStatus
+import com.wenshu.writing.domain.model.Setting
 import com.wenshu.writing.domain.model.Skill
 import com.wenshu.writing.domain.model.SkillReference
-import com.wenshu.writing.domain.model.WorldSetting
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -39,22 +37,24 @@ fun ChapterEntity.toModel() = Chapter(
     updatedAt = updatedAt
 )
 
-fun CharacterEntity.toModel() = CharacterCard(
+fun SettingEntity.toModel() = Setting(
     id = id,
-    name = name,
-    role = role,
-    description = description,
     bookId = bookId,
+    category = category,
+    title = title,
+    subtitle = subtitle,
+    content = content,
     createdAt = createdAt,
     updatedAt = updatedAt
 )
 
-fun WorldSettingEntity.toModel() = WorldSetting(
+fun Setting.toEntity() = SettingEntity(
     id = id,
+    bookId = bookId,
     category = category,
     title = title,
+    subtitle = subtitle?.takeIf { it.isNotBlank() },
     content = content,
-    bookId = bookId,
     createdAt = createdAt,
     updatedAt = updatedAt
 )
@@ -173,26 +173,6 @@ fun ChatMessage.toEntity(sessionId: Long) = ChatMessageEntity(
     content = content,
     isError = isError,
     createdAt = createdAt
-)
-
-fun OutlineEntity.toModel() = Outline(
-    id = id,
-    novelId = novelId,
-    title = title,
-    content = content,
-    kind = kind,
-    createdAt = createdAt,
-    updatedAt = updatedAt
-)
-
-fun Outline.toEntity() = OutlineEntity(
-    id = id,
-    novelId = novelId,
-    title = title,
-    content = content,
-    kind = kind,
-    createdAt = createdAt,
-    updatedAt = updatedAt
 )
 
 fun ChapterTaskEntity.toModel() = ChapterTask(

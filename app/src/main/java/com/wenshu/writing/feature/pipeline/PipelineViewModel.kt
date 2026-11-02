@@ -5,32 +5,28 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.wenshu.writing.data.remote.AiClient
 import com.wenshu.writing.data.repository.ChatRepository
-import com.wenshu.writing.data.repository.LibraryRepository
 import com.wenshu.writing.data.repository.NovelRepository
 import com.wenshu.writing.data.repository.PipelineRepository
 import com.wenshu.writing.data.repository.PreferencesRepository
+import com.wenshu.writing.data.repository.SettingRepository
 import com.wenshu.writing.data.repository.SkillRepository
 import com.wenshu.writing.domain.model.AiConfig
 import com.wenshu.writing.domain.model.Chapter
 import com.wenshu.writing.domain.model.ChapterTask
 import com.wenshu.writing.domain.model.ChatMessage
 import com.wenshu.writing.domain.model.ChatRole
-import com.wenshu.writing.domain.model.CharacterCard
 import com.wenshu.writing.domain.model.NewBookInfo
 import com.wenshu.writing.domain.model.Novel
-import com.wenshu.writing.domain.model.Outline
 import com.wenshu.writing.domain.model.PipelineRun
 import com.wenshu.writing.domain.model.PipelineStatus
+import com.wenshu.writing.domain.model.Setting
+import com.wenshu.writing.domain.model.SettingCategories
 import com.wenshu.writing.domain.model.Skill
-import com.wenshu.writing.domain.model.WorldSetting
 import com.wenshu.writing.domain.model.stripFrontMatter
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -39,7 +35,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 /** 流水线六个阶段的固定顺序与展示名。 */
 val pipelineStageNames = listOf(
@@ -58,9 +53,9 @@ data class PipelineUiState(
     val status: PipelineStatus = PipelineStatus.PAUSED,
     val info: NewBookInfo? = null,
     val output: String = "",
-    val characters: List<CharacterCard> = emptyList(),
-    val worldSettings: List<WorldSetting> = emptyList(),
-    val outlines: List<Outline> = emptyList(),
+    val characters: List<Setting> = emptyList(),
+    val worldSettings: List<Setting> = emptyList(),
+    val outlines: List<Setting> = emptyList(),
     val tasks: List<ChapterTask> = emptyList(),
     val isRunning: Boolean = false,
     val message: String? = null
@@ -72,7 +67,7 @@ class PipelineViewModel(
     private val novelRepository: NovelRepository,
     private val skillRepository: SkillRepository,
     private val pipelineRepository: PipelineRepository,
-    private val libraryRepository: LibraryRepository,
+    private val settingRepository: SettingRepository,
     private val preferencesRepository: PreferencesRepository,
     private val chatRepository: ChatRepository,
     private val aiClient: AiClient
@@ -111,12 +106,12 @@ class PipelineViewModel(
         }
 
         viewModelScope.launch {
-            libraryRepository.observeCharacters(novelId).collect { list ->
+            settingRepository.observeByCategory(novelId, SettingCategories.CHARACTER).collect { list ->
                 _uiState.update { it.copy(characters = list) }
             }
         }
         viewModelScope.launch {
-            libraryRepository.observeWorldSettings(novelId).collect { list ->
+            settingRepository.observeByCategory(novelId, SettingCategories.WORLD).collect { list ->
                 _uiState.update { it.copy(worldSettings = list) }
             }
         }
@@ -140,12 +135,14 @@ class PipelineViewModel(
         }
         viewModelScope.launch {
             pipelineRepository.saveRun(
-                novelId = novelId,
-                skillId = _uiState.value.skill?.id ?: 0L,
-                stage = 2,
-                status = PipelineStatus.PAUSED,
-                inputJson = json.encodeToString(NewBookInfo.serializer(), info),
-                outputJson = "阶段 1 采集完成，基础信息已保存。请执行阶段 2 生成新书基础设定。"
+                PipelineRun(
+                    novelId = novelId,
+                    skillId = _uiState.value.skill?.id ?: 0L,
+                    stage = 2,
+                    status = PipelineStatus.PAUSED,
+                    inputJson = json.encodeToString(NewBookInfo.serializer(), info),
+                    outputJson = "阶段 1 采集完成，基础信息已保存。请执行阶段 2 生成新书基础设定。"
+                )
             )
             _uiState.update {
                 it.copy(
@@ -216,11 +213,10 @@ class PipelineViewModel(
 
         var parsed = runCatching { parseJson(reply) }.getOrNull()
         if (parsed != null) {
-            val worlds = parsed.arrayObjects("worldSettings")
-            worlds.forEach { item ->
+            parsed.arrayObjects("worldSettings").forEach { item ->
                 val title = item.string("title")
                 if (title.isNotBlank()) {
-                    libraryRepository.addWorldSetting(
+                    settingRepository.addWorldSetting(
                         category = item.string("category").ifBlank { "世界观" },
                         title = title,
                         content = item.string("content"),
@@ -231,7 +227,7 @@ class PipelineViewModel(
             parsed.arrayObjects("characters").forEach { item ->
                 val name = item.string("name")
                 if (name.isNotBlank()) {
-                    libraryRepository.addCharacter(
+                    settingRepository.addCharacter(
                         name = name,
                         role = item.string("role"),
                         description = item.string("description"),
@@ -241,7 +237,7 @@ class PipelineViewModel(
             }
             (parsed["goldenFinger"] as? JsonObject)?.let { finger ->
                 val title = finger.string("title").ifBlank { "金手指体系" }
-                libraryRepository.addWorldSetting(
+                settingRepository.addWorldSetting(
                     category = "金手指",
                     title = title,
                     content = finger.string("content"),
@@ -249,8 +245,7 @@ class PipelineViewModel(
                 )
             }
         } else {
-            // 解析失败时原样落库，避免丢失 AI 输出，由作者手动整理。
-            libraryRepository.addWorldSetting(
+            settingRepository.addWorldSetting(
                 category = "AI生成",
                 title = "新书基础设定（待整理）",
                 content = reply,
@@ -284,31 +279,30 @@ class PipelineViewModel(
         val reply = chat(config, system, user) ?: return
 
         val parsed = runCatching { parseJson(reply) }.getOrNull()
-        val outlines = mutableListOf<Outline>()
+        val outlines = mutableListOf<Setting>()
         if (parsed != null) {
             val overall = parsed.string("overall")
             if (overall.isNotBlank()) {
-                outlines += Outline(novelId = novelId, title = "全书总纲", content = overall, kind = "overall")
+                outlines += Setting(category = SettingCategories.OUTLINE, title = "全书总纲", content = overall)
             }
             parsed.arrayObjects("details").forEachIndexed { index, item ->
                 val title = item.string("title").ifBlank { "细纲 ${index + 1}" }
-                outlines += Outline(
-                    novelId = novelId,
+                outlines += Setting(
+                    category = SettingCategories.OUTLINE,
                     title = title,
-                    content = item.string("content"),
-                    kind = "detail"
+                    content = item.string("content")
                 )
             }
         }
         if (outlines.isEmpty()) {
-            outlines += Outline(novelId = novelId, title = "全书总纲（待整理）", content = reply, kind = "overall")
+            outlines += Setting(category = SettingCategories.OUTLINE, title = "全书总纲（待整理）", content = reply)
         }
         pipelineRepository.replaceOutlines(novelId, outlines)
         completeStage(
             state,
             nextStage = 4,
             output = buildString {
-                appendLine("阶段 3 大纲已归入本书：总纲 + ${outlines.count { it.kind == "detail" }} 条细纲。")
+                appendLine("阶段 3 大纲已归入本书：总纲 + ${outlines.count { it.title.startsWith("细纲") }} 条细纲。")
                 appendLine()
                 appendLine(reply)
             }
@@ -446,12 +440,14 @@ class PipelineViewModel(
         status: PipelineStatus = PipelineStatus.PAUSED
     ) {
         pipelineRepository.saveRun(
-            novelId = novelId,
-            skillId = state.skill?.id ?: 0L,
-            stage = nextStage,
-            status = status,
-            inputJson = state.info?.let { json.encodeToString(NewBookInfo.serializer(), it) }.orEmpty(),
-            outputJson = output
+            PipelineRun(
+                novelId = novelId,
+                skillId = state.skill?.id ?: 0L,
+                stage = nextStage,
+                status = status,
+                inputJson = state.info?.let { json.encodeToString(NewBookInfo.serializer(), it) }.orEmpty(),
+                outputJson = output
+            )
         )
         _uiState.update {
             it.copy(stage = nextStage, status = status, output = output)
@@ -461,12 +457,14 @@ class PipelineViewModel(
     private suspend fun markFailed(message: String) {
         val state = _uiState.value
         pipelineRepository.saveRun(
-            novelId = novelId,
-            skillId = state.skill?.id ?: 0L,
-            stage = state.stage,
-            status = PipelineStatus.FAILED,
-            inputJson = state.info?.let { json.encodeToString(NewBookInfo.serializer(), it) }.orEmpty(),
-            outputJson = state.output
+            PipelineRun(
+                novelId = novelId,
+                skillId = state.skill?.id ?: 0L,
+                stage = state.stage,
+                status = PipelineStatus.FAILED,
+                inputJson = state.info?.let { json.encodeToString(NewBookInfo.serializer(), it) }.orEmpty(),
+                outputJson = state.output
+            )
         )
         _uiState.update { it.copy(status = PipelineStatus.FAILED, message = message) }
     }
@@ -516,15 +514,18 @@ class PipelineViewModel(
     }
 
     private suspend fun bookSettingsText(): String = buildString {
-        val characters = libraryRepository.getCharacters(novelId)
-        val worlds = libraryRepository.getWorldSettings(novelId)
+        val characters = settingRepository.getByCategory(novelId, SettingCategories.CHARACTER)
+        val worlds = settingRepository.getByCategory(novelId, SettingCategories.WORLD)
         appendLine("### 世界观设定")
         if (worlds.isEmpty()) appendLine("（暂无）")
-        worlds.forEach { appendLine("- [${it.category}] ${it.title}：${it.content}") }
+        worlds.forEach { appendLine("- ${it.title}：${it.content}") }
         appendLine()
         appendLine("### 人物卡")
         if (characters.isEmpty()) appendLine("（暂无）")
-        characters.forEach { appendLine("- ${it.name}（${it.role}）：${it.description}") }
+        characters.forEach {
+            val role = it.subtitle?.takeIf { s -> s.isNotBlank() }?.let { s -> "（$s）" }.orEmpty()
+            appendLine("- ${it.title}$role：${it.content}")
+        }
     }
 
     private suspend fun outlineText(): String = buildString {
@@ -555,7 +556,7 @@ class PipelineViewModel(
             novelRepository: NovelRepository,
             skillRepository: SkillRepository,
             pipelineRepository: PipelineRepository,
-            libraryRepository: LibraryRepository,
+            settingRepository: SettingRepository,
             preferencesRepository: PreferencesRepository,
             chatRepository: ChatRepository,
             aiClient: AiClient
@@ -568,7 +569,7 @@ class PipelineViewModel(
                     novelRepository,
                     skillRepository,
                     pipelineRepository,
-                    libraryRepository,
+                    settingRepository,
                     preferencesRepository,
                     chatRepository,
                     aiClient

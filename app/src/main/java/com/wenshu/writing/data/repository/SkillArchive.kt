@@ -2,10 +2,6 @@ package com.wenshu.writing.data.repository
 
 import com.wenshu.writing.domain.model.Skill
 import com.wenshu.writing.domain.model.SkillReference
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonObject
 import java.io.InputStream
 import java.io.OutputStream
 import java.text.SimpleDateFormat
@@ -20,13 +16,13 @@ import java.util.zip.ZipOutputStream
 class SkillImportException(message: String) : IllegalArgumentException(message)
 
 /**
- * Skill zip 包的读写规则（1.0.4 定稿）。
+ * Skill zip 包的读写规则（1.0.6 定稿）。
  *
- * 读取兼容：技能根目录的 `main.md` / `main` / `skill.md` 为主体文件，`meta.json` 为可选项。
- * 缺少 meta.json 时自动使用「导入Skill_时间戳」作为名称、简介留空。根目录存在主体文件视为单技能包；
- * 否则每个一级子目录视为一个技能。仅读取技能根目录的主体文件，不递归嵌套包。
+ * 读取：zip 根目录存在任意一个 main / main.md / skill.md 即可导入，无需任何配置文件。
+ * 根目录主体文件视为单技能包；否则每个一级子目录视为一个技能。
+ * 名称优先取一级目录名，根目录单技能则用「导入Skill_时间戳」。
  *
- * 写出统一：`main` + `meta.json` + `references/`。
+ * 写出：仅打包 main.md 主体 + references/ 参考素材，不写入任何 json 或冗余文件。
  */
 object SkillArchive {
 
@@ -38,10 +34,8 @@ object SkillArchive {
     )
 
     private val MAIN_FILE_NAMES = listOf("main.md", "main", "skill.md")
-    /** 项目导出固定主体文件名（1.0.3 起的全局规范）。 */
-    private const val MAIN_FILE_NAME = "main"
-    private const val META_FILE_NAME = "meta.json"
-    private val json = Json { ignoreUnknownKeys = true }
+    /** 1.0.6 起导出固定使用带扩展名的 main.md。 */
+    private const val MAIN_FILE_NAME = "main.md"
 
     fun readZip(input: InputStream): List<ImportedSkill> {
         val entries = LinkedHashMap<String, ByteArray>()
@@ -84,7 +78,7 @@ object SkillArchive {
             .groupBy { path -> path.substringBeforeLast('/', "") }
 
         if (mainByDir.isEmpty()) {
-            throw SkillImportException("未识别到Skill主体文件（main / skill.md）")
+            throw SkillImportException("未识别到Skill主体文件（main / main.md / skill.md）")
         }
 
         // 根目录主体文件优先，视为单技能包；否则只取一级子目录，避免嵌套包错乱。
@@ -94,15 +88,16 @@ object SkillArchive {
             mainByDir.keys.filter { it.isNotBlank() && !it.contains('/') }.sorted()
         }
         if (roots.isEmpty()) {
-            throw SkillImportException("未识别到Skill主体文件（main / skill.md）")
+            throw SkillImportException("未识别到Skill主体文件（main / main.md / skill.md）")
         }
 
         return roots.mapIndexed { index, root ->
             val mainPath = pickMainPath(mainByDir[root].orEmpty())
-                ?: throw SkillImportException("未识别到Skill主体文件（main / skill.md）")
+                ?: throw SkillImportException("未识别到Skill主体文件（main / main.md / skill.md）")
             val main = readText(entries.getValue(mainPath))
-            val meta = parseMeta(entries, root, index)
             val folderName = root.substringAfterLast('/')
+            // 名称：一级目录名优先；根目录单技能用时间戳兜底。
+            val name = folderName.ifBlank { defaultSkillName(index) }
             val references = entries.asSequence()
                 .filter { (path, _) ->
                     if (root.isEmpty()) {
@@ -124,8 +119,8 @@ object SkillArchive {
                 .toList()
 
             ImportedSkill(
-                name = meta.first,
-                description = meta.second,
+                name = name,
+                description = "",
                 mainMarkdown = main,
                 references = references
             )
@@ -135,7 +130,6 @@ object SkillArchive {
     fun writeSingle(output: OutputStream, skill: Skill) {
         ZipOutputStream(output).use { zip ->
             zip.putText(MAIN_FILE_NAME, skill.mainMarkdown)
-            zip.putText(META_FILE_NAME, metaJson(skill))
             skill.references.forEach { reference ->
                 zip.putText("references/${safeFileName(reference.name)}", reference.content)
             }
@@ -148,7 +142,6 @@ object SkillArchive {
             skills.forEach { skill ->
                 val folder = uniqueFolderName(skill.name, usedFolders)
                 zip.putText("$folder/$MAIN_FILE_NAME", skill.mainMarkdown)
-                zip.putText("$folder/$META_FILE_NAME", metaJson(skill))
                 skill.references.forEach { reference ->
                     zip.putText(
                         "$folder/references/${safeFileName(reference.name)}",
@@ -167,43 +160,10 @@ object SkillArchive {
         return paths.firstOrNull()
     }
 
-    /**
-     * meta.json 为可选：存在且格式正确时读取 name / desc；
-     * 缺失或无法解析时回落到「导入Skill_时间戳」，简介留空，允许用户在详情页修改。
-     */
-    private fun parseMeta(
-        entries: Map<String, ByteArray>,
-        root: String,
-        index: Int
-    ): Pair<String, String> {
-        val metaPath = entries.keys.firstOrNull { path ->
-            val expected = if (root.isEmpty()) META_FILE_NAME else "$root/$META_FILE_NAME"
-            path.equals(expected, ignoreCase = true)
-        } ?: return defaultSkillName(index) to ""
-
-        val raw = readText(entries.getValue(metaPath))
-        val obj: JsonObject = try {
-            json.parseToJsonElement(raw).jsonObject
-        } catch (e: Exception) {
-            return defaultSkillName(index) to ""
-        }
-        val name = obj.stringField("name")?.trim()?.takeIf { it.isNotBlank() }
-            ?: defaultSkillName(index)
-        val desc = (obj.stringField("desc") ?: obj.stringField("description"))
-            ?.trim()
-            .orEmpty()
-        return name to desc
-    }
-
     private fun defaultSkillName(index: Int): String {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
             .format(Date(System.currentTimeMillis() + index))
         return "导入Skill_$stamp"
-    }
-
-    private fun JsonObject.stringField(key: String): String? {
-        val value = this[key] as? JsonPrimitive ?: return null
-        return value.content
     }
 
     private fun validatePath(path: String) {
@@ -221,28 +181,6 @@ object SkillArchive {
     private fun readText(bytes: ByteArray): String {
         val text = bytes.toString(Charsets.UTF_8)
         return text.removePrefix("\uFEFF").removePrefix("\uFEFF")
-    }
-
-    private fun metaJson(skill: Skill): String = buildString {
-        append("{\n")
-        append("  \"name\": ").append(quote(skill.name)).append(",\n")
-        append("  \"desc\": ").append(quote(skill.description)).append("\n")
-        append("}\n")
-    }
-
-    private fun quote(value: String): String = buildString {
-        append('"')
-        value.forEach { ch ->
-            when (ch) {
-                '"' -> append("\\\"")
-                '\\' -> append("\\\\")
-                '\n' -> append("\\n")
-                '\r' -> append("\\r")
-                '\t' -> append("\\t")
-                else -> append(ch)
-            }
-        }
-        append('"')
     }
 
     private fun safeFileName(name: String): String {

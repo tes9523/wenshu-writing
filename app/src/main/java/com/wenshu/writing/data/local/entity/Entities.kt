@@ -37,24 +37,14 @@ data class ChapterEntity(
     val updatedAt: Long
 )
 
-@Entity(tableName = "characters", indices = [Index("bookId")])
-data class CharacterEntity(
+@Entity(tableName = "settings", indices = [Index("bookId"), Index("category")])
+data class SettingEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
-    val name: String,
-    val role: String = "",
-    val description: String = "",
     val bookId: Long? = null,
-    val createdAt: Long,
-    val updatedAt: Long
-)
-
-@Entity(tableName = "world_settings", indices = [Index("bookId")])
-data class WorldSettingEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
-    val category: String = "",
+    val category: String,
     val title: String,
+    val subtitle: String? = null,
     val content: String = "",
-    val bookId: Long? = null,
     val createdAt: Long,
     val updatedAt: Long
 )
@@ -131,18 +121,6 @@ data class ChatMessageEntity(
     val content: String,
     val isError: Boolean = false,
     val createdAt: Long
-)
-
-/** 书稿大纲：全书总纲与前期细纲。 */
-@Entity(tableName = "outlines", indices = [Index("novelId")])
-data class OutlineEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
-    val novelId: Long,
-    val title: String,
-    val content: String,
-    val kind: String = "outline",
-    val createdAt: Long,
-    val updatedAt: Long
 )
 
 /** 章节任务卡。 */

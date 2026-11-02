@@ -9,6 +9,7 @@ import com.wenshu.writing.data.repository.MemoRepository
 import com.wenshu.writing.data.repository.NovelRepository
 import com.wenshu.writing.data.repository.PipelineRepository
 import com.wenshu.writing.data.repository.PreferencesRepository
+import com.wenshu.writing.data.repository.SettingRepository
 import com.wenshu.writing.data.repository.SkillRepository
 import com.wenshu.writing.domain.model.AiConfig
 import com.wenshu.writing.domain.model.ApiProviderType
@@ -30,8 +31,10 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -41,10 +44,28 @@ enum class SaveTarget {
     CHAPTER, OUTLINE, MEMO
 }
 
-/** AI 识别到的大纲与同名书稿，等待用户选择「新建另一本 / 打开已有书稿」。 */
-data class PendingOutlineImport(
+/** AI 解析混合文档后得到的结构化结果。 */
+data class ParsedDocItem(val title: String, val content: String)
+data class ParsedCharacter(val name: String, val role: String, val description: String)
+data class ParsedWorldSetting(val category: String, val title: String, val content: String)
+data class ParsedDocResult(
+    val title: String?,
+    val outline: String?,
+    val characters: List<ParsedCharacter>,
+    val worldSettings: List<ParsedWorldSetting>,
+    val custom: Map<String, List<ParsedDocItem>>
+) {
+    val hasAnyContent: Boolean
+        get() = !outline.isNullOrBlank() ||
+            characters.isNotEmpty() ||
+            worldSettings.isNotEmpty() ||
+            custom.values.any { it.isNotEmpty() }
+}
+
+/** 书名重复时等待用户选择「新建另一本 / 打开已有书稿」。 */
+data class PendingDocImport(
     val title: String,
-    val outline: String,
+    val doc: ParsedDocResult,
     val existingNovelId: Long
 )
 
@@ -68,7 +89,9 @@ data class AiChatUiState(
     val pipelineSkill: Skill? = null,
     val message: String? = null,
     val toast: String? = null,
-    val pendingOutline: PendingOutlineImport? = null
+    val pendingDoc: PendingDocImport? = null,
+    /** AI 未识别到书名时，让用户手动输入书名后再落库。 */
+    val pendingTitleInput: ParsedDocResult? = null
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -78,6 +101,7 @@ class AiChatViewModel(
     private val skillRepository: SkillRepository,
     private val chatRepository: ChatRepository,
     private val pipelineRepository: PipelineRepository,
+    private val settingRepository: SettingRepository,
     private val memoRepository: MemoRepository,
     private val aiClient: AiClient
 ) : ViewModel() {
@@ -298,31 +322,40 @@ class AiChatViewModel(
     }
 
     /**
-     * 保存 AI 回复，并解析大纲建档标记。
-     * 识别到完整大纲且书名唯一时自动建书；书名重复则交给界面弹窗选择。
+     * 保存 AI 回复，并解析文档建档标记。
+     * 1.0.6 起支持完整文档解析：书名 + 大纲 + 人物 + 世界观 + 自定义分类全部落库。
      */
     private suspend fun handleAssistantReply(
         sessionId: Long,
         rawReply: String,
         userText: String
     ) {
-        val (cleanReply, bookTitle) = extractOutlineMarker(rawReply)
+        val (cleanReply, doc) = extractDocMarker(rawReply)
         chatRepository.appendMessage(
             sessionId = sessionId,
             role = ChatRole.ASSISTANT,
             content = cleanReply.ifBlank { rawReply }
         )
-        if (bookTitle.isNullOrBlank() || userText.isBlank()) return
+        if (doc == null || userText.isBlank()) return
 
-        val existing = novelRepository.findNovelByTitle(bookTitle)
+        // 未识别到书名：询问用户手动输入，不强制创建
+        val title = doc.title?.takeIf { it.isNotBlank() }
+        if (title == null) {
+            if (doc.hasAnyContent) {
+                _uiState.update { it.copy(pendingTitleInput = doc) }
+            }
+            return
+        }
+
+        val existing = novelRepository.findNovelByTitle(title)
         if (existing == null) {
-            createNovelFromOutline(sessionId, bookTitle, userText)
+            createNovelFromDoc(sessionId, title, doc)
         } else {
             _uiState.update {
                 it.copy(
-                    pendingOutline = PendingOutlineImport(
-                        title = bookTitle,
-                        outline = userText,
+                    pendingDoc = PendingDocImport(
+                        title = title,
+                        doc = doc,
                         existingNovelId = existing.id
                     )
                 )
@@ -330,48 +363,118 @@ class AiChatViewModel(
         }
     }
 
-    private suspend fun createNovelFromOutline(sessionId: Long, title: String, outline: String) {
-        val novelId = novelRepository.createNovel(title, "由 AI 大纲导入")
-        pipelineRepository.appendOutline(novelId, "AI导入大纲", outline, kind = "outline")
+    /** 把解析出的全部内容按分类写入指定书稿的设定库。 */
+    private suspend fun persistDoc(bookId: Long, doc: ParsedDocResult) {
+        if (!doc.outline.isNullOrBlank()) {
+            settingRepository.addOutline("AI导入大纲", doc.outline, bookId)
+        }
+        doc.characters.forEach { ch ->
+            settingRepository.addCharacter(
+                name = ch.name.ifBlank { "未命名角色" },
+                role = ch.role,
+                description = ch.description,
+                bookId = bookId
+            )
+        }
+        doc.worldSettings.forEach { ws ->
+            settingRepository.addWorldSetting(
+                category = ws.category,
+                title = ws.title.ifBlank { "世界观设定" },
+                content = ws.content,
+                bookId = bookId
+            )
+        }
+        doc.custom.forEach { (category, items) ->
+            items.forEach { item ->
+                settingRepository.addSetting(
+                    category = category,
+                    title = item.title.ifBlank { category },
+                    content = item.content,
+                    bookId = bookId
+                )
+            }
+        }
+    }
+
+    private suspend fun createNovelFromDoc(sessionId: Long, title: String, doc: ParsedDocResult) {
+        val novelId = novelRepository.createNovel(title, "由 AI 文档导入")
+        persistDoc(novelId, doc)
         preferencesRepository.setActiveNovel(novelId)
         chatRepository.bindSessionBook(sessionId, novelId)
         _uiState.update { it.copy(selectedNovelId = novelId) }
         chatRepository.appendMessage(
             sessionId = sessionId,
             role = ChatRole.ASSISTANT,
-            content = "已根据你提供的大纲创建新书《$title》，可前往书稿查看"
+            content = buildCompleteNotice(title, doc)
         )
     }
 
-    /** 书名重复时：新建另一本，或打开已有书稿并追加大纲。 */
-    fun confirmPendingOutline(createNew: Boolean) {
-        val pending = _uiState.value.pendingOutline ?: return
+    private fun buildCompleteNotice(title: String, doc: ParsedDocResult): String {
+        val parts = mutableListOf<String>()
+        if (!doc.outline.isNullOrBlank()) parts.add("大纲")
+        if (doc.characters.isNotEmpty()) parts.add("人物设定")
+        if (doc.worldSettings.isNotEmpty()) parts.add("世界观")
+        if (doc.custom.isNotEmpty()) parts.add("自定义分类")
+        val detail = if (parts.isEmpty()) "" else "，已自动入库：${parts.joinToString("、")}"
+        return "已解析完整文档并创建新书《$title》$detail"
+    }
+
+    /** 书名重复时：新建另一本，或打开已有书稿并追加全部解析内容。 */
+    fun confirmPendingDoc(createNew: Boolean) {
+        val pending = _uiState.value.pendingDoc ?: return
         val sessionId = _uiState.value.activeSessionId ?: return
-        _uiState.update { it.copy(pendingOutline = null) }
+        _uiState.update { it.copy(pendingDoc = null) }
         viewModelScope.launch {
             if (createNew) {
-                createNovelFromOutline(sessionId, pending.title, pending.outline)
+                createNovelFromDoc(sessionId, pending.title, pending.doc)
             } else {
-                pipelineRepository.appendOutline(
-                    pending.existingNovelId,
-                    "AI导入大纲",
-                    pending.outline,
-                    kind = "outline"
-                )
+                persistDoc(pending.existingNovelId, pending.doc)
                 preferencesRepository.setActiveNovel(pending.existingNovelId)
                 chatRepository.bindSessionBook(sessionId, pending.existingNovelId)
                 _uiState.update { it.copy(selectedNovelId = pending.existingNovelId) }
                 chatRepository.appendMessage(
                     sessionId = sessionId,
                     role = ChatRole.ASSISTANT,
-                    content = "已打开书稿《${pending.title}》，大纲已写入该书稿"
+                    content = "已打开书稿《${pending.title}》，解析内容已写入该书稿设定库"
                 )
             }
         }
     }
 
-    fun dismissPendingOutline() {
-        _uiState.update { it.copy(pendingOutline = null) }
+    fun dismissPendingDoc() {
+        _uiState.update { it.copy(pendingDoc = null) }
+    }
+
+    /** 用户手动输入书名后，继续落库流程。 */
+    fun confirmTitleInput(title: String) {
+        val doc = _uiState.value.pendingTitleInput ?: return
+        val sessionId = _uiState.value.activeSessionId ?: return
+        val trimmed = title.trim()
+        if (trimmed.isBlank()) {
+            _uiState.update { it.copy(message = "书名不能为空") }
+            return
+        }
+        _uiState.update { it.copy(pendingTitleInput = null) }
+        viewModelScope.launch {
+            val existing = novelRepository.findNovelByTitle(trimmed)
+            if (existing == null) {
+                createNovelFromDoc(sessionId, trimmed, doc)
+            } else {
+                _uiState.update {
+                    it.copy(
+                        pendingDoc = PendingDocImport(
+                            title = trimmed,
+                            doc = doc,
+                            existingNovelId = existing.id
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun dismissTitleInput() {
+        _uiState.update { it.copy(pendingTitleInput = null) }
     }
 
     /** 删除单条消息，仅影响会话记录。 */
@@ -441,11 +544,10 @@ class AiChatViewModel(
                     }
 
                     SaveTarget.OUTLINE -> {
-                        pipelineRepository.appendOutline(
-                            novelId,
-                            "AI导入大纲_$stamp",
-                            content,
-                            kind = "outline"
+                        settingRepository.addOutline(
+                            title = "AI导入大纲_$stamp",
+                            content = content,
+                            bookId = novelId
                         )
                     }
 
@@ -491,20 +593,27 @@ class AiChatViewModel(
     )
 
     companion object {
-        /** 模型输出的大纲建档标记；由 App 解析并创建书稿。 */
-        private const val OUTLINE_MARKER = "<<WENSHU_NEW_BOOK>>"
+        /** 模型输出的文档建档标记；由 App 解析并创建书稿与分类设定。 */
+        private const val DOC_MARKER = "<<WENSHU_NEW_BOOK>>"
 
         private val json = Json {
             ignoreUnknownKeys = true
             isLenient = true
+            coerceInputValues = true
         }
 
-        private val OUTLINE_PROTOCOL = """
-【大纲建档协议】当用户消息是一份完整小说大纲（包含书名与明确的故事主线、分卷或章节规划）时：
-1. 正常给出简短的确认或建议，不要复述大纲；
-2. 在回复的最后单独一行输出：<<WENSHU_NEW_BOOK>>{"title":"提取的书名"}
-3. 书名取大纲中的正式名称，去掉《》和多余空格；无法确定书名或用户输入不是有效大纲时，不要输出该标记；
-4. 不要输出其他 JSON，也不要虚构 bookId，书稿创建由 App 完成。
+        private val DOC_PROTOCOL = """
+【全文建档协议】当用户粘贴或输入一份混合长文（可能包含书名、大纲、人物、世界观、势力、道具、功法、伏笔、设定杂项等）时：
+1. 正常给出简短的确认或建议，不要复述原文；
+2. 在回复的最后单独一行输出标记和 JSON：
+<<WENSHU_NEW_BOOK>>{"title":"书名","outline":"大纲正文","characters":[{"name":"角色名","role":"身份","description":"描述"}],"worldSettings":[{"category":"分类","title":"标题","content":"内容"}],"custom":{"势力":[{"title":"标题","content":"内容"}],"道具":[{"title":"标题","content":"内容"}]}}
+3. title：提取正式书名，去掉《》和多余空格；识别不到书名时填 null 或留空字符串，App 会让用户手动输入；
+4. outline：大纲正文，无则省略或填空字符串；
+5. characters：人物列表，每项含 name（姓名）、role（身份/定位）、description（外貌性格背景等描述）；无则省略；
+6. worldSettings：世界观/世界规则/背景设定，每项含 category（子分类，可空）、title、content；无则省略；
+7. custom：其他自定义设定（如势力、道具、功法、伏笔、种族等），键为分类名，值为条目数组（含 title、content）；无则省略；
+8. 只输出一个 JSON 对象，不要输出多个，不要虚构 bookId，全部数据落库由 App 完成；
+9. 用户输入不是有效文档时，不要输出该标记。
 """.trim()
 
         /** 取出输入框末尾正在输入的 @ 关键字；不处于 @ 语境时返回 null。 */
@@ -533,7 +642,7 @@ class AiChatViewModel(
             append(AiClient.DEFAULT_SYSTEM_PROMPT)
             appendLine()
             appendLine()
-            appendLine(OUTLINE_PROTOCOL)
+            appendLine(DOC_PROTOCOL)
             val active = skills.filter { it.enabled && !it.isPipeline }
             if (active.isNotEmpty()) {
                 appendLine()
@@ -545,18 +654,15 @@ class AiChatViewModel(
             }
         }
 
-        /** 剥离建档标记，返回给用户展示的文本与提取到的书名。 */
-        private fun extractOutlineMarker(reply: String): Pair<String, String?> {
-            val index = reply.indexOf(OUTLINE_MARKER)
+        /** 剥离建档标记，返回给用户展示的文本与解析出的文档结构。 */
+        private fun extractDocMarker(reply: String): Pair<String, ParsedDocResult?> {
+            val index = reply.indexOf(DOC_MARKER)
             if (index < 0) return reply to null
-            val after = reply.substring(index + OUTLINE_MARKER.length)
+            val after = reply.substring(index + DOC_MARKER.length).trim()
             val start = after.indexOf('{')
-            val end = if (start >= 0) after.indexOf('}', startIndex = start + 1) else -1
-            val title = if (start >= 0 && end > start) {
-                runCatching {
-                    val obj = json.parseToJsonElement(after.substring(start, end + 1)).jsonObject
-                    (obj["title"] as? JsonPrimitive)?.content?.trim()
-                }.getOrNull()
+            val end = if (start >= 0) findMatchingBrace(after, start) else -1
+            val doc = if (start >= 0 && end > start) {
+                runCatching { parseDocJson(after.substring(start, end + 1)) }.getOrNull()
             } else {
                 null
             }
@@ -564,7 +670,71 @@ class AiChatViewModel(
                 .trimEnd()
                 .removeSuffix("```")
                 .trimEnd()
-            return clean to title?.takeIf { it.isNotBlank() }
+            return clean to doc
+        }
+
+        private fun findMatchingBrace(text: String, openIndex: Int): Int {
+            var depth = 0
+            var inString = false
+            var escaped = false
+            for (i in openIndex until text.length) {
+                val ch = text[i]
+                if (inString) {
+                    if (escaped) escaped = false
+                    else if (ch == '\\') escaped = true
+                    else if (ch == '"') inString = false
+                } else {
+                    when (ch) {
+                        '"' -> inString = true
+                        '{' -> depth++
+                        '}' -> {
+                            depth--
+                            if (depth == 0) return i
+                        }
+                    }
+                }
+            }
+            return -1
+        }
+
+        private fun parseDocJson(raw: String): ParsedDocResult {
+            val obj = json.parseToJsonElement(raw).jsonObject
+            val title = obj["title"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotBlank() }
+            val outline = obj["outline"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            val characters = obj["characters"]?.jsonArray?.mapNotNull { el ->
+                val c = el.jsonObject
+                val name = c["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val role = c["role"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val description = c["description"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (name.isBlank() && description.isBlank()) null
+                else ParsedCharacter(name = name, role = role, description = description)
+            }.orEmpty()
+            val worldSettings = obj["worldSettings"]?.jsonArray?.mapNotNull { el ->
+                val w = el.jsonObject
+                val category = w["category"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val title2 = w["title"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val content = w["content"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (title2.isBlank() && content.isBlank()) null
+                else ParsedWorldSetting(category = category, title = title2, content = content)
+            }.orEmpty()
+            val custom = obj["custom"]?.jsonObject?.entries?.associate { (category, value) ->
+                val items = value.jsonArray.mapNotNull { el ->
+                    val it = el.jsonObject
+                    val t = it["title"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    val c = it["content"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    if (t.isBlank() && c.isBlank()) null
+                    else ParsedDocItem(title = t, content = c)
+                }
+                category to items
+            }?.filterValues { it.isNotEmpty() }.orEmpty()
+
+            return ParsedDocResult(
+                title = title,
+                outline = outline,
+                characters = characters,
+                worldSettings = worldSettings,
+                custom = custom
+            )
         }
 
         fun factory(
@@ -573,6 +743,7 @@ class AiChatViewModel(
             skillRepository: SkillRepository,
             chatRepository: ChatRepository,
             pipelineRepository: PipelineRepository,
+            settingRepository: SettingRepository,
             memoRepository: MemoRepository,
             aiClient: AiClient
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
@@ -584,6 +755,7 @@ class AiChatViewModel(
                     skillRepository,
                     chatRepository,
                     pipelineRepository,
+                    settingRepository,
                     memoRepository,
                     aiClient
                 ) as T

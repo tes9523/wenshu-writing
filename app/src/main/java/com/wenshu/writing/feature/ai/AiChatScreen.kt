@@ -2,8 +2,10 @@ package com.wenshu.writing.feature.ai
 
 import android.widget.Toast
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -21,8 +23,11 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.Send
@@ -99,6 +104,7 @@ fun AiChatScreen(
             skillRepository = container.skillRepository,
             chatRepository = container.chatRepository,
             pipelineRepository = container.pipelineRepository,
+            settingRepository = container.settingRepository,
             memoRepository = container.memoRepository,
             aiClient = container.aiClient
         )
@@ -115,6 +121,7 @@ fun AiChatScreen(
     var messageToDelete by remember { mutableStateOf<ChatMessage?>(null) }
     var sessionToDelete by remember { mutableStateOf<ChatSession?>(null) }
     var showNewSessionDialog by remember { mutableStateOf(false) }
+    var showBookPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.pipelineSkill) {
         val skill = state.pipelineSkill ?: return@LaunchedEffect
@@ -149,7 +156,6 @@ fun AiChatScreen(
     }
 
     val activeSession = state.sessions.firstOrNull { it.id == state.activeSessionId }
-    val activeBookTitle = state.novels.firstOrNull { it.id == state.selectedNovelId }?.title
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -262,6 +268,8 @@ fun AiChatScreen(
                 ProviderSummaryBar(
                     providerName = state.providerName,
                     model = state.model,
+                    isSending = state.isSending,
+                    lastMessageIsError = state.messages.lastOrNull()?.isError == true,
                     onClick = onOpenProviders
                 )
 
@@ -315,18 +323,29 @@ fun AiChatScreen(
 
     if (showNewSessionDialog) {
         NewSessionDialog(
-            bookTitle = activeBookTitle,
-            onBookSession = {
-                viewModel.createSession(state.selectedNovelId)
-                showNewSessionDialog = false
-                scope.launch { drawerState.close() }
-            },
+            hasBooks = state.novels.isNotEmpty(),
             onGlobalSession = {
                 viewModel.createSession(null)
                 showNewSessionDialog = false
                 scope.launch { drawerState.close() }
             },
+            onBindBookSession = {
+                showNewSessionDialog = false
+                showBookPicker = true
+            },
             onDismiss = { showNewSessionDialog = false }
+        )
+    }
+
+    if (showBookPicker) {
+        BookPickerDialog(
+            novels = state.novels,
+            onSelect = { novelId ->
+                viewModel.createSession(novelId)
+                showBookPicker = false
+                scope.launch { drawerState.close() }
+            },
+            onDismiss = { showBookPicker = false }
         )
     }
 
@@ -381,20 +400,66 @@ fun AiChatScreen(
         )
     }
 
-    state.pendingOutline?.let { pending ->
+    state.pendingDoc?.let { pending ->
         AlertDialog(
-            onDismissRequest = viewModel::dismissPendingOutline,
+            onDismissRequest = viewModel::dismissPendingDoc,
             title = { Text("书稿重名") },
             text = { Text("已存在书稿《${pending.title}》，请选择处理方式。") },
             confirmButton = {
-                TextButton(onClick = { viewModel.confirmPendingOutline(createNew = true) }) {
+                TextButton(onClick = { viewModel.confirmPendingDoc(createNew = true) }) {
                     Text("新建另一本")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { viewModel.confirmPendingOutline(createNew = false) }) {
+                TextButton(onClick = { viewModel.confirmPendingDoc(createNew = false) }) {
                     Text("打开已有书稿")
                 }
+            }
+        )
+    }
+
+    state.pendingTitleInput?.let { doc ->
+        var titleInput by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = viewModel::dismissTitleInput,
+            title = { Text("请输入书名") },
+            text = {
+                Column {
+                    Text("未能从文档中识别出书名，请手动输入后继续落库。")
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = titleInput,
+                        onValueChange = { titleInput = it },
+                        label = { Text("书名") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (doc.hasAnyContent) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = buildString {
+                                append("将写入：")
+                                val parts = mutableListOf<String>()
+                                if (!doc.outline.isNullOrBlank()) parts.add("大纲")
+                                if (doc.characters.isNotEmpty()) parts.add("人物")
+                                if (doc.worldSettings.isNotEmpty()) parts.add("世界观")
+                                if (doc.custom.isNotEmpty()) parts.add("自定义设定")
+                                append(parts.joinToString("、"))
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { viewModel.confirmTitleInput(titleInput) },
+                    enabled = titleInput.isNotBlank()
+                ) { Text("确认") }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissTitleInput) { Text("取消") }
             }
         )
     }
@@ -464,9 +529,9 @@ private fun SessionDrawerItem(
 
 @Composable
 private fun NewSessionDialog(
-    bookTitle: String?,
-    onBookSession: () -> Unit,
+    hasBooks: Boolean,
     onGlobalSession: () -> Unit,
+    onBindBookSession: () -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
@@ -475,18 +540,63 @@ private fun NewSessionDialog(
         text = {
             Column {
                 TextButton(
-                    onClick = onBookSession,
-                    enabled = bookTitle != null,
+                    onClick = onGlobalSession,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("全局会话（不绑定书稿）")
+                }
+                TextButton(
+                    onClick = onBindBookSession,
+                    enabled = hasBooks,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = bookTitle?.let { "本书会话 ·《$it》" } ?: "本书会话（请先在书稿中新建书籍）",
+                        text = if (hasBooks) "绑定书稿会话" else "绑定书稿会话（请先新建书稿）",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                TextButton(onClick = onGlobalSession, modifier = Modifier.fillMaxWidth()) {
-                    Text("全局会话（不绑定书稿）")
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+/** 绑定书稿会话时弹出的书稿选择列表。 */
+@Composable
+private fun BookPickerDialog(
+    novels: List<Novel>,
+    onSelect: (Long) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择要绑定的书稿") },
+        text = {
+            LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                items(items = novels, key = { it.id }) { novel ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(novel.id) }
+                            .padding(vertical = 10.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = novel.title,
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Icon(
+                            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         },
@@ -601,8 +711,15 @@ private fun SaveToBookDialog(
 private fun ProviderSummaryBar(
     providerName: String?,
     model: String,
+    isSending: Boolean,
+    lastMessageIsError: Boolean,
     onClick: () -> Unit
 ) {
+    val statusColor = when {
+        isSending -> Color(0xFFF5A623)
+        lastMessageIsError -> Color(0xFFE53935)
+        else -> Color(0xFF43A047)
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -610,6 +727,13 @@ private fun ProviderSummaryBar(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(statusColor)
+        )
+        Spacer(Modifier.width(8.dp))
         Text(
             text = "当前提供商：${providerName ?: "未配置"}｜模型：${model.ifBlank { "未配置" }}",
             style = MaterialTheme.typography.labelMedium,
@@ -646,8 +770,8 @@ private fun GreetingBubble() {
                 Spacer(Modifier.width(10.dp))
                 Text(
                     text = "告诉我你想写的情节、场景或人物对白，我会直接给出可用的正文。" +
-                        "生成后可通过气泡下方的【保存】存入书稿章节、大纲或备忘录。" +
-                        "也可以直接粘贴完整大纲，我会帮你创建新书。",
+                        "生成后可通过气泡下方的图标存入书稿章节、大纲或备忘录。" +
+                        "也可以直接粘贴完整文档（含书名、大纲、人物、世界观等），我会自动解析并创建新书。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -711,11 +835,10 @@ private fun MessageBubble(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        MessageAction("复制", Icons.Outlined.ContentCopy, onClick = onCopy)
-                        MessageAction("保存", Icons.Outlined.Save, onClick = onSave)
-                        MessageAction("删除", Icons.Outlined.DeleteOutline, onClick = onDelete)
+                        MessageAction(Icons.Outlined.ContentCopy, onClick = onCopy)
+                        MessageAction(Icons.Outlined.Save, onClick = onSave)
+                        MessageAction(Icons.Outlined.DeleteOutline, onClick = onDelete)
                         MessageAction(
-                            "重新生成",
                             Icons.Outlined.Refresh,
                             enabled = !isSending,
                             onClick = onRegenerate
@@ -729,20 +852,25 @@ private fun MessageBubble(
 
 @Composable
 private fun MessageAction(
-    label: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     enabled: Boolean = true,
     onClick: () -> Unit
 ) {
-    TextButton(
+    IconButton(
         onClick = onClick,
         enabled = enabled,
-        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
-        modifier = Modifier.height(30.dp)
+        modifier = Modifier.size(32.dp)
     ) {
-        Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp))
-        Spacer(Modifier.width(3.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall)
+        Icon(
+            icon,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = if (enabled) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+            }
+        )
     }
 }
 

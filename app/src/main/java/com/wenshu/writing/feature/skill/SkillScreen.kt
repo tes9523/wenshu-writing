@@ -20,12 +20,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ExpandLess
@@ -50,6 +54,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -60,6 +65,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -77,6 +83,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wenshu.writing.di.AppContainer
 import com.wenshu.writing.domain.model.Skill
+import com.wenshu.writing.domain.model.SkillReference
 import com.wenshu.writing.ui.components.ConfirmDeleteDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -98,6 +105,7 @@ fun SkillScreen(
     var deleteTarget by remember { mutableStateOf<Skill?>(null) }
     var showExportDialog by remember { mutableStateOf(false) }
     var pendingExportIds by remember { mutableStateOf<List<Long>>(emptyList()) }
+    var selectedSkillId by remember { mutableStateOf<Long?>(null) }
 
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -147,7 +155,7 @@ fun SkillScreen(
                         skill.description.contains(query, ignoreCase = true))
             }
         }
-        val builtIns = filtered.filter { it.isBuiltIn }
+        val builtIns = filtered.filter { it.isBuiltIn && !it.isPipeline }
         val customs = filtered.filterNot { it.isBuiltIn }
 
         LazyColumn(
@@ -246,7 +254,7 @@ fun SkillScreen(
                         SkillCard(
                             skill = skill,
                             onToggle = { enabled -> viewModel.setEnabled(skill, enabled) },
-                            onEdit = { onOpenSkill(skill.id) },
+                            onEdit = { selectedSkillId = skill.id },
                             onRename = { renameTarget = skill },
                             onDelete = { deleteTarget = skill }
                         )
@@ -268,7 +276,7 @@ fun SkillScreen(
                         SkillCard(
                             skill = skill,
                             onToggle = { enabled -> viewModel.setEnabled(skill, enabled) },
-                            onEdit = { onOpenSkill(skill.id) },
+                            onEdit = { selectedSkillId = skill.id },
                             onRename = { renameTarget = skill },
                             onDelete = { deleteTarget = skill }
                         )
@@ -346,6 +354,26 @@ fun SkillScreen(
                 exportLauncher.launch(fileName)
             }
         )
+    }
+
+    selectedSkillId?.let { skillId ->
+        val skill = skills.firstOrNull { it.id == skillId }
+        if (skill != null) {
+            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            ModalBottomSheet(
+                onDismissRequest = { selectedSkillId = null },
+                sheetState = sheetState
+            ) {
+                SkillDetailSheet(
+                    skill = skill,
+                    onEdit = {
+                        selectedSkillId = null
+                        onOpenSkill(skill.id)
+                    },
+                    onClose = { selectedSkillId = null }
+                )
+            }
+        }
     }
 }
 
@@ -672,6 +700,133 @@ private fun ExportSelectionDialog(
             TextButton(onClick = onDismiss) { Text("取消") }
         }
     )
+}
+
+/** Skill 详情底部弹层：名称、简介、主提示词、参考素材横向标签。 */
+@Composable
+private fun SkillDetailSheet(
+    skill: Skill,
+    onEdit: () -> Unit,
+    onClose: () -> Unit
+) {
+    var selectedRef by remember { mutableStateOf(0) }
+    val hasRefs = skill.references.isNotEmpty()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Outlined.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = skill.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (skill.description.isNotBlank()) {
+                    Text(
+                        text = skill.description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            IconButton(onClick = onClose) {
+                Icon(Icons.Outlined.Close, contentDescription = "关闭")
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "主提示词（main.md）",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = skill.mainMarkdown.ifBlank { "（暂无内容）" },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+
+        if (hasRefs) {
+            Spacer(Modifier.height(14.dp))
+            Text(
+                text = "参考素材",
+                style = MaterialTheme.typography.titleSmall
+            )
+            Spacer(Modifier.height(6.dp))
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(items = skill.references, key = { it.name }) { reference ->
+                    val index = skill.references.indexOf(reference)
+                    FilterChip(
+                        selected = index == selectedRef,
+                        onClick = { selectedRef = index },
+                        label = {
+                            Text(
+                                text = reference.name,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            skill.references.getOrNull(selectedRef)?.let { reference ->
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Text(
+                        text = reference.content.ifBlank { "（暂无内容）" },
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(14.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+        OutlinedButton(
+            onClick = onEdit,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("编辑")
+        }
+    }
 }
 
 private fun safeFileName(name: String): String =

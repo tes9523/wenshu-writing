@@ -4,11 +4,11 @@ import android.content.Context
 import com.wenshu.writing.data.local.AppDatabase
 import com.wenshu.writing.data.remote.AiClient
 import com.wenshu.writing.data.repository.ChatRepository
-import com.wenshu.writing.data.repository.LibraryRepository
 import com.wenshu.writing.data.repository.MemoRepository
 import com.wenshu.writing.data.repository.NovelRepository
 import com.wenshu.writing.data.repository.PipelineRepository
 import com.wenshu.writing.data.repository.PreferencesRepository
+import com.wenshu.writing.data.repository.SettingRepository
 import com.wenshu.writing.data.repository.SkillRepository
 
 /**
@@ -24,8 +24,8 @@ class AppContainer(context: Context) {
         chapterDao = database.chapterDao()
     )
 
-    val libraryRepository = LibraryRepository(
-        libraryDao = database.libraryDao()
+    val settingRepository = SettingRepository(
+        settingDao = database.settingDao()
     )
 
     val preferencesRepository = PreferencesRepository(
@@ -46,7 +46,8 @@ class AppContainer(context: Context) {
     )
 
     val pipelineRepository = PipelineRepository(
-        pipelineDao = database.pipelineDao()
+        pipelineDao = database.pipelineDao(),
+        settingDao = database.settingDao()
     )
 
     val aiClient = AiClient()

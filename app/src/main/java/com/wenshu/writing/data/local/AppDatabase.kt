@@ -8,7 +8,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.wenshu.writing.data.local.dao.ChapterDao
 import com.wenshu.writing.data.local.dao.ChatDao
-import com.wenshu.writing.data.local.dao.LibraryDao
+import com.wenshu.writing.data.local.dao.SettingDao
 import com.wenshu.writing.data.local.dao.PipelineDao
 import com.wenshu.writing.data.local.dao.MemoDao
 import com.wenshu.writing.data.local.dao.NovelDao
@@ -19,22 +19,19 @@ import com.wenshu.writing.data.local.entity.AiProfileEntity
 import com.wenshu.writing.data.local.entity.AppSettingsEntity
 import com.wenshu.writing.data.local.entity.ChapterEntity
 import com.wenshu.writing.data.local.entity.ChapterTaskEntity
-import com.wenshu.writing.data.local.entity.CharacterEntity
 import com.wenshu.writing.data.local.entity.ChatMessageEntity
 import com.wenshu.writing.data.local.entity.ChatSessionEntity
 import com.wenshu.writing.data.local.entity.MemoNoteEntity
 import com.wenshu.writing.data.local.entity.NovelEntity
-import com.wenshu.writing.data.local.entity.OutlineEntity
 import com.wenshu.writing.data.local.entity.PipelineRunEntity
+import com.wenshu.writing.data.local.entity.SettingEntity
 import com.wenshu.writing.data.local.entity.SkillEntity
-import com.wenshu.writing.data.local.entity.WorldSettingEntity
 
 @Database(
     entities = [
         NovelEntity::class,
         ChapterEntity::class,
-        CharacterEntity::class,
-        WorldSettingEntity::class,
+        SettingEntity::class,
         AiConfigEntity::class,
         AiProfileEntity::class,
         AppSettingsEntity::class,
@@ -42,18 +39,17 @@ import com.wenshu.writing.data.local.entity.WorldSettingEntity
         SkillEntity::class,
         ChatSessionEntity::class,
         ChatMessageEntity::class,
-        OutlineEntity::class,
         ChapterTaskEntity::class,
         PipelineRunEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun novelDao(): NovelDao
     abstract fun chapterDao(): ChapterDao
-    abstract fun libraryDao(): LibraryDao
+    abstract fun settingDao(): SettingDao
     abstract fun settingsDao(): SettingsDao
     abstract fun memoDao(): MemoDao
     abstract fun skillDao(): SkillDao
@@ -208,6 +204,48 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 1.0.5 -> 1.0.6：设定库统一为 `settings` 表（人物 / 世界观 / 大纲 / 自定义分类）。
+         * 历史 characters、world_settings、outlines 数据无损迁入新表后删除旧表。
+         */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `settings` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`bookId` INTEGER, " +
+                        "`category` TEXT NOT NULL, " +
+                        "`title` TEXT NOT NULL, " +
+                        "`subtitle` TEXT, " +
+                        "`content` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_settings_bookId` ON `settings` (`bookId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_settings_category` ON `settings` (`category`)")
+
+                db.execSQL(
+                    "INSERT INTO `settings` (`bookId`, `category`, `title`, `subtitle`, `content`, `createdAt`, `updatedAt`) " +
+                        "SELECT `bookId`, '人物', `name`, `role`, `description`, `createdAt`, `updatedAt` FROM `characters`"
+                )
+                db.execSQL(
+                    "INSERT INTO `settings` (`bookId`, `category`, `title`, `subtitle`, `content`, `createdAt`, `updatedAt`) " +
+                        "SELECT `bookId`, '世界观', " +
+                        "CASE WHEN `category` IS NOT NULL AND `category` <> '' " +
+                        "THEN '[' || `category` || '] ' || `title` ELSE `title` END, " +
+                        "NULL, `content`, `createdAt`, `updatedAt` FROM `world_settings`"
+                )
+                db.execSQL(
+                    "INSERT INTO `settings` (`bookId`, `category`, `title`, `subtitle`, `content`, `createdAt`, `updatedAt`) " +
+                        "SELECT `novelId`, '大纲', `title`, NULL, `content`, `createdAt`, `updatedAt` FROM `outlines`"
+                )
+
+                db.execSQL("DROP TABLE IF EXISTS `characters`")
+                db.execSQL("DROP TABLE IF EXISTS `world_settings`")
+                db.execSQL("DROP TABLE IF EXISTS `outlines`")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -218,7 +256,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     DATABASE_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .build()
                     .also { instance = it }
             }

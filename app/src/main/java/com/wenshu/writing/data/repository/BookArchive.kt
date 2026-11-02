@@ -1,10 +1,10 @@
 package com.wenshu.writing.data.repository
 
 import com.wenshu.writing.domain.model.Chapter
-import com.wenshu.writing.domain.model.CharacterCard
 import com.wenshu.writing.domain.model.MemoNote
 import com.wenshu.writing.domain.model.Novel
-import com.wenshu.writing.domain.model.WorldSetting
+import com.wenshu.writing.domain.model.Setting
+import com.wenshu.writing.domain.model.SettingCategories
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -21,13 +21,12 @@ class BookArchiveException(message: String) : IllegalArgumentException(message)
 data class BookArchiveData(
     val novel: Novel,
     val chapters: List<Chapter>,
-    val characters: List<CharacterCard>,
-    val worldSettings: List<WorldSetting>,
+    val settings: List<Setting>,
     val memos: List<MemoNote>
 )
 
 /**
- * 整书数据包：一个 zip，内含 book.json，打包本书全部章节、人物卡、世界观与备忘录。
+ * 整书数据包：一个 zip，内含 book.json，打包本书全部章节、设定与备忘录。
  * 导入时所有数据归属新建书稿的 bookId，不影响全局公共素材。
  */
 object BookArchive {
@@ -43,20 +42,14 @@ object BookArchive {
         output: OutputStream,
         novel: Novel,
         chapters: List<Chapter>,
-        characters: List<CharacterCard>,
-        worldSettings: List<WorldSetting>,
+        settings: List<Setting>,
         memos: List<MemoNote>
     ) {
         val dto = BookDto(
             novel = NovelDto(novel.title, novel.description),
-            chapters = chapters.map {
-                ChapterDto(it.title, it.content, it.orderIndex)
-            },
-            characters = characters.map {
-                CharacterDto(it.name, it.role, it.description)
-            },
-            worldSettings = worldSettings.map {
-                WorldDto(it.category, it.title, it.content)
+            chapters = chapters.map { ChapterDto(it.title, it.content, it.orderIndex) },
+            settings = settings.map {
+                SettingDto(it.category, it.title, it.subtitle.orEmpty(), it.content)
             },
             memos = memos.map { MemoDto(it.title, it.content) }
         )
@@ -98,24 +91,31 @@ object BookArchive {
             throw BookArchiveException("整书数据包缺少书名")
         }
 
+        val settings = mutableListOf<Setting>()
+        settings += dto.settings.map {
+            Setting(category = it.category, title = it.title, subtitle = it.subtitle.ifBlank { null }, content = it.content)
+        }
+        // 兼容 1.0.5 及更早版本的独立人物/世界观字段。
+        dto.characters.forEach {
+            settings += Setting(
+                category = SettingCategories.CHARACTER,
+                title = it.name,
+                subtitle = it.role.ifBlank { null },
+                content = it.description
+            )
+        }
+        dto.worldSettings.forEach {
+            val title = if (it.category.isNotBlank()) "[${it.category}] ${it.title}" else it.title
+            settings += Setting(category = SettingCategories.WORLD, title = title, content = it.content)
+        }
+
         return BookArchiveData(
             novel = Novel(title = dto.novel.title, description = dto.novel.description),
             chapters = dto.chapters.map {
-                Chapter(
-                    title = it.title,
-                    content = it.content,
-                    orderIndex = it.orderIndex
-                )
+                Chapter(title = it.title, content = it.content, orderIndex = it.orderIndex)
             },
-            characters = dto.characters.map {
-                CharacterCard(name = it.name, role = it.role, description = it.description)
-            },
-            worldSettings = dto.worldSettings.map {
-                WorldSetting(category = it.category, title = it.title, content = it.content)
-            },
-            memos = dto.memos.map {
-                MemoNote(title = it.title, content = it.content)
-            }
+            settings = settings,
+            memos = dto.memos.map { MemoNote(title = it.title, content = it.content) }
         )
     }
 
@@ -123,6 +123,7 @@ object BookArchive {
     private data class BookDto(
         val novel: NovelDto,
         val chapters: List<ChapterDto> = emptyList(),
+        val settings: List<SettingDto> = emptyList(),
         val characters: List<CharacterDto> = emptyList(),
         val worldSettings: List<WorldDto> = emptyList(),
         val memos: List<MemoDto> = emptyList()
@@ -139,6 +140,14 @@ object BookArchive {
         val title: String,
         val content: String = "",
         val orderIndex: Int = 0
+    )
+
+    @Serializable
+    private data class SettingDto(
+        val category: String,
+        val title: String,
+        val subtitle: String = "",
+        val content: String = ""
     )
 
     @Serializable

@@ -1,5 +1,6 @@
 package com.wenshu.writing.feature.library
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,37 +14,43 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AddCircle
 import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material.icons.outlined.Groups
-import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,139 +59,107 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wenshu.writing.di.AppContainer
-import com.wenshu.writing.domain.model.CharacterCard
-import com.wenshu.writing.domain.model.Novel
-import com.wenshu.writing.domain.model.WorldSetting
+import com.wenshu.writing.domain.model.Setting
+import com.wenshu.writing.domain.model.SettingCategories
 import com.wenshu.writing.ui.components.ConfirmDeleteDialog
 import com.wenshu.writing.ui.components.EmptyState
-import com.wenshu.writing.ui.components.InitialCover
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LibraryScreen(container: AppContainer) {
+fun LibraryScreen(
+    container: AppContainer,
+    onBack: () -> Unit
+) {
     val viewModel: LibraryViewModel = viewModel(
         factory = LibraryViewModel.factory(
-            repository = container.libraryRepository,
-            preferencesRepository = container.preferencesRepository,
-            novelRepository = container.novelRepository
+            repository = container.settingRepository,
+            novelRepository = container.novelRepository,
+            preferencesRepository = container.preferencesRepository
         )
     )
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    var showEditor by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<Setting?>(null) }
+    var toDelete by remember { mutableStateOf<Setting?>(null) }
+    var showAddCategory by remember { mutableStateOf(false) }
+    var renameTarget by remember { mutableStateOf<String?>(null) }
 
-    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    var showCharacterDialog by remember { mutableStateOf(false) }
-    var editingCharacter by remember { mutableStateOf<CharacterCard?>(null) }
-    var showWorldDialog by remember { mutableStateOf(false) }
-    var editingWorld by remember { mutableStateOf<WorldSetting?>(null) }
-    var characterToDelete by remember { mutableStateOf<CharacterCard?>(null) }
-    var worldToDelete by remember { mutableStateOf<WorldSetting?>(null) }
+    LaunchedEffect(state.message) {
+        // 轻量提示由 Snackbar 处理；此处留空，避免额外依赖。
+    }
 
     Scaffold(
-        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         topBar = {
-            Column {
-                TopAppBar(title = { Text("设定库", style = MaterialTheme.typography.titleLarge) })
-                BookSelectorBar(
-                    novels = state.novels,
-                    activeBookId = state.activeBookId,
-                    onSelect = viewModel::selectBook
-                )
-                TabRow(selectedTabIndex = selectedTab) {
-                    Tab(
-                        selected = selectedTab == 0,
-                        onClick = { selectedTab = 0 },
-                        text = { Text("人物卡") }
-                    )
-                    Tab(
-                        selected = selectedTab == 1,
-                        onClick = { selectedTab = 1 },
-                        text = { Text("世界观") }
-                    )
+            TopAppBar(
+                title = { Text("设定库") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+                    }
                 }
-            }
+            )
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = {
-                    if (selectedTab == 0) {
-                        editingCharacter = null
-                        showCharacterDialog = true
-                    } else {
-                        editingWorld = null
-                        showWorldDialog = true
-                    }
+                    editing = null
+                    showEditor = true
                 },
                 icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
-                text = { Text(if (selectedTab == 0) "新建人物" else "新建设定") }
+                text = { Text("新建${state.selectedCategory}") }
             )
         }
     ) { innerPadding ->
-        if (selectedTab == 0) {
-            if (state.characters.isEmpty()) {
-                EmptyState(
-                    icon = Icons.Outlined.Groups,
-                    title = "还没有人物卡",
-                    message = "记录角色的身份、性格与背景，写作时随时查阅。",
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding),
-                    action = {
-                        TextButton(onClick = { showCharacterDialog = true }) {
-                            Text("新建人物卡")
-                        }
-                    }
-                )
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 100.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(items = state.characters, key = { it.id }) { character ->
-                        CharacterCardItem(
-                            card = character,
-                            onClick = {
-                                editingCharacter = character
-                                showCharacterDialog = true
-                            },
-                            onDelete = { characterToDelete = character }
-                        )
-                    }
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
+            BookSelectorBar(
+                novels = state.novels,
+                activeBookId = state.activeBookId,
+                onSelect = viewModel::selectBook
+            )
+
+            CategoryTabs(
+                categories = state.categories,
+                selected = state.selectedCategory,
+                onSelect = viewModel::selectCategory,
+                onAddCategory = { showAddCategory = true },
+                onRename = { renameTarget = it },
+                onDelete = { name ->
+                    viewModel.deleteCategory(name)
                 }
-            }
-        } else {
-            if (state.worldSettings.isEmpty()) {
+            )
+
+            if (state.items.isEmpty()) {
                 EmptyState(
-                    icon = Icons.Outlined.Public,
-                    title = "还没有世界观设定",
-                    message = "整理地理、势力、规则与历史，让故事世界保持一致。",
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding),
+                    icon = Icons.Outlined.Description,
+                    title = "暂无${state.selectedCategory}设定",
+                    message = "点击右下角「新建${state.selectedCategory}」开始记录。",
+                    modifier = Modifier.fillMaxSize(),
                     action = {
-                        TextButton(onClick = { showWorldDialog = true }) {
-                            Text("新建世界观设定")
+                        TextButton(onClick = { editing = null; showEditor = true }) {
+                            Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("新建${state.selectedCategory}")
                         }
                     }
                 )
             } else {
                 LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 100.dp),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(items = state.worldSettings, key = { it.id }) { setting ->
-                        WorldSettingItem(
+                    items(items = state.items, key = { it.id }) { setting ->
+                        SettingCard(
                             setting = setting,
                             onClick = {
-                                editingWorld = setting
-                                showWorldDialog = true
+                                editing = setting
+                                showEditor = true
                             },
-                            onDelete = { worldToDelete = setting }
+                            onDelete = { toDelete = setting }
                         )
                     }
                 }
@@ -192,136 +167,176 @@ fun LibraryScreen(container: AppContainer) {
         }
     }
 
-    if (showCharacterDialog) {
-        CharacterDialog(
-            initial = editingCharacter,
-            onDismiss = { showCharacterDialog = false },
-            onSave = { name, role, description ->
-                val initial = editingCharacter
-                val card = if (initial == null) {
-                    CharacterCard(
-                        name = name,
-                        role = role,
-                        description = description,
-                        bookId = state.activeBookId
-                    )
+    if (showEditor) {
+        SettingEditorDialog(
+            category = state.selectedCategory,
+            initial = editing,
+            onDismiss = { showEditor = false },
+            onSave = { title, subtitle, content ->
+                if (editing != null) {
+                    viewModel.saveSetting(
+                        editing!!.copy(title = title, subtitle = subtitle, content = content)
+                    ) { showEditor = false }
                 } else {
-                    initial.copy(name = name, role = role, description = description)
+                    viewModel.createSetting(title, subtitle, content) { showEditor = false }
                 }
-                viewModel.saveCharacter(card) { showCharacterDialog = false }
             }
         )
     }
 
-    if (showWorldDialog) {
-        WorldSettingDialog(
-            initial = editingWorld,
-            onDismiss = { showWorldDialog = false },
-            onSave = { category, title, content ->
-                val initial = editingWorld
-                val setting = if (initial == null) {
-                    WorldSetting(
-                        category = category,
-                        title = title,
-                        content = content,
-                        bookId = state.activeBookId
-                    )
-                } else {
-                    initial.copy(category = category, title = title, content = content)
-                }
-                viewModel.saveWorldSetting(setting) { showWorldDialog = false }
-            }
+    toDelete?.let { setting ->
+        ConfirmDeleteDialog(
+            title = "删除设定",
+            message = "确定删除「${setting.displayTitle}」吗？",
+            onConfirm = {
+                viewModel.deleteSetting(setting.id)
+                toDelete = null
+            },
+            onDismiss = { toDelete = null }
         )
     }
 
-    characterToDelete?.let { character ->
-        ConfirmDeleteDialog(
-            title = "删除人物卡",
-            message = "确定删除「${character.name}」吗？",
-            onConfirm = {
-                viewModel.deleteCharacter(character.id)
-                characterToDelete = null
+    if (showAddCategory) {
+        CategoryNameDialog(
+            title = "新增分类",
+            initial = "",
+            confirmLabel = "创建",
+            onConfirm = { name ->
+                viewModel.addCategory(name)
+                showAddCategory = false
             },
-            onDismiss = { characterToDelete = null }
+            onDismiss = { showAddCategory = false }
         )
     }
 
-    worldToDelete?.let { setting ->
-        ConfirmDeleteDialog(
-            title = "删除世界观设定",
-            message = "确定删除「${setting.title}」吗？",
-            onConfirm = {
-                viewModel.deleteWorldSetting(setting.id)
-                worldToDelete = null
+    renameTarget?.let { old ->
+        CategoryNameDialog(
+            title = "重命名分类",
+            initial = old,
+            confirmLabel = "保存",
+            onConfirm = { name ->
+                viewModel.renameCategory(old, name)
+                renameTarget = null
             },
-            onDismiss = { worldToDelete = null }
+            onDismiss = { renameTarget = null }
         )
     }
 }
 
-/**
- * 书稿隔离选择器：所有人物卡与世界观只展示当前书稿的数据。
- * 选择「全局公共素材」时显示 bookId = null 的手动素材。
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BookSelectorBar(
-    novels: List<Novel>,
+    novels: List<com.wenshu.writing.domain.model.Novel>,
     activeBookId: Long?,
     onSelect: (Long?) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val label = if (activeBookId == null) {
-        "全局公共素材"
-    } else {
-        novels.firstOrNull { it.id == activeBookId }?.title ?: "全局公共素材"
-    }
-
+    val selectedTitle = novels.firstOrNull { it.id == activeBookId }?.title ?: "全局公共素材"
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { expanded = !expanded },
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         OutlinedTextField(
-            value = label,
+            value = selectedTitle,
             onValueChange = {},
             readOnly = true,
             singleLine = true,
-            label = { Text("当前书稿") },
+            label = { Text("当前设定归属") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
                 .fillMaxWidth()
                 .menuAnchor(MenuAnchorType.PrimaryNotEditable)
         )
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
-        ) {
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
                 text = { Text("全局公共素材") },
-                onClick = {
-                    onSelect(null)
-                    expanded = false
-                }
+                onClick = { onSelect(null); expanded = false }
             )
             novels.forEach { novel ->
                 DropdownMenuItem(
                     text = { Text(novel.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    onClick = {
-                        onSelect(novel.id)
-                        expanded = false
-                    }
+                    onClick = { onSelect(novel.id); expanded = false }
                 )
             }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CharacterCardItem(
-    card: CharacterCard,
+private fun CategoryTabs(
+    categories: List<String>,
+    selected: String,
+    onSelect: (String) -> Unit,
+    onAddCategory: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: (String) -> Unit
+) {
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(categories, key = { it }) { category ->
+            val isBuiltIn = SettingCategories.isBuiltIn(category)
+            var menuExpanded by remember { mutableStateOf(false) }
+            Box {
+                FilterChip(
+                    selected = category == selected,
+                    onClick = { onSelect(category) },
+                    label = {
+                        Text(category, maxLines = 1)
+                    },
+                    trailingIcon = if (!isBuiltIn) {
+                        {
+                            Box {
+                                IconButton(
+                                    onClick = { menuExpanded = true },
+                                    modifier = Modifier.size(20.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.MoreVert,
+                                        contentDescription = "分类操作",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text("重命名") },
+                                        leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                                        onClick = { menuExpanded = false; onRename(category) }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("删除分类") },
+                                        leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null) },
+                                        onClick = { menuExpanded = false; onDelete(category) }
+                                    )
+                                }
+                            }
+                        }
+                    } else null,
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
+                    )
+                )
+            }
+        }
+        item {
+            FilterChip(
+                selected = false,
+                onClick = onAddCategory,
+                label = { Text("新建分类") },
+                leadingIcon = { Icon(Icons.Outlined.AddCircle, contentDescription = null, modifier = Modifier.size(16.dp)) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingCard(
+    setting: Setting,
     onClick: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -336,86 +351,28 @@ private fun CharacterCardItem(
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            InitialCover(text = card.name, modifier = Modifier.size(48.dp))
-            Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = card.name,
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (card.role.isNotBlank()) {
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = card.role,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.secondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-                if (card.description.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = card.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-            IconButton(onClick = onDelete) {
-                Icon(
-                    Icons.Outlined.DeleteOutline,
-                    contentDescription = "删除",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun WorldSettingItem(
-    setting: WorldSetting,
-    onClick: () -> Unit,
-    onDelete: () -> Unit
-) {
-    Card(
-        onClick = onClick,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                if (setting.category.isNotBlank()) {
-                    Text(
-                        text = setting.category,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
-                    Spacer(Modifier.height(2.dp))
-                }
                 Text(
-                    text = setting.title,
+                    text = setting.displayTitle,
                     style = MaterialTheme.typography.titleSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                setting.subtitle?.takeIf { it.isNotBlank() }?.let { subtitle ->
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 if (setting.content.isNotBlank()) {
                     Spacer(Modifier.height(4.dp))
                     Text(
                         text = setting.content,
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 3,
                         overflow = TextOverflow.Ellipsis
@@ -434,51 +391,54 @@ private fun WorldSettingItem(
 }
 
 @Composable
-private fun CharacterDialog(
-    initial: CharacterCard?,
+private fun SettingEditorDialog(
+    category: String,
+    initial: Setting?,
     onDismiss: () -> Unit,
-    onSave: (name: String, role: String, description: String) -> Unit
+    onSave: (title: String, subtitle: String, content: String) -> Unit
 ) {
-    var name by remember { mutableStateOf(initial?.name.orEmpty()) }
-    var role by remember { mutableStateOf(initial?.role.orEmpty()) }
-    var description by remember { mutableStateOf(initial?.description.orEmpty()) }
+    var title by remember(initial) { mutableStateOf(initial?.title ?: "") }
+    var subtitle by remember(initial) {
+        mutableStateOf(
+            if (category == SettingCategories.CHARACTER) initial?.subtitle.orEmpty() else initial?.subtitle.orEmpty()
+        )
+    }
+    var content by remember(initial) { mutableStateOf(initial?.content ?: "") }
+    val subtitleLabel = if (category == SettingCategories.CHARACTER) "身份/定位（选填）" else "副标题（选填）"
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "新建人物卡" else "编辑人物卡") },
+        title = { Text(if (initial == null) "新建$category" else "编辑$category") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column {
                 OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("姓名") },
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text(if (category == SettingCategories.CHARACTER) "姓名" else "标题") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = role,
-                    onValueChange = { role = it },
-                    label = { Text("身份 / 定位（可选）") },
+                    value = subtitle,
+                    onValueChange = { subtitle = it },
+                    label = { Text(subtitleLabel) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = description,
-                    onValueChange = { description = it },
-                    label = { Text("性格、背景、关系等") },
-                    minLines = 4,
-                    maxLines = 7,
-                    modifier = Modifier.fillMaxWidth()
+                    value = content,
+                    onValueChange = { content = it },
+                    label = { Text("内容") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp)
                 )
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = { onSave(name.trim(), role.trim(), description.trim()) },
-                enabled = name.isNotBlank()
-            ) {
-                Text("保存")
-            }
+            TextButton(onClick = { onSave(title, subtitle, content) }) { Text("保存") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("取消") }
@@ -487,51 +447,30 @@ private fun CharacterDialog(
 }
 
 @Composable
-private fun WorldSettingDialog(
-    initial: WorldSetting?,
-    onDismiss: () -> Unit,
-    onSave: (category: String, title: String, content: String) -> Unit
+private fun CategoryNameDialog(
+    title: String,
+    initial: String,
+    confirmLabel: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit
 ) {
-    var category by remember { mutableStateOf(initial?.category.orEmpty()) }
-    var title by remember { mutableStateOf(initial?.title.orEmpty()) }
-    var content by remember { mutableStateOf(initial?.content.orEmpty()) }
-
+    var name by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "新建世界观设定" else "编辑世界观设定") },
+        title = { Text(title) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = category,
-                    onValueChange = { category = it },
-                    label = { Text("分类（可选，如地理 / 势力 / 规则）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("标题") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = content,
-                    onValueChange = { content = it },
-                    label = { Text("设定内容") },
-                    minLines = 4,
-                    maxLines = 7,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("分类名称") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(category.trim(), title.trim(), content.trim()) },
-                enabled = title.isNotBlank()
-            ) {
-                Text("保存")
-            }
+                onClick = { if (name.isNotBlank()) onConfirm(name) }
+            ) { Text(confirmLabel) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("取消") }

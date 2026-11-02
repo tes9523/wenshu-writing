@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.wenshu.writing.data.repository.SkillArchive
 import com.wenshu.writing.data.repository.SkillRepository
 import com.wenshu.writing.domain.model.Skill
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class SkillUiState(
     val search: String = "",
@@ -89,9 +91,11 @@ class SkillViewModel(
         _uiState.update { it.copy(isBusy = true, message = null) }
         viewModelScope.launch {
             try {
-                val items = context.contentResolver.openInputStream(uri)
-                    ?.use { repository.parseImport(it) }
-                    ?: throw IllegalArgumentException("无法读取所选文件")
+                val items = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)
+                        ?.use { repository.parseImport(it) }
+                        ?: throw IllegalArgumentException("无法读取所选文件")
+                }
                 val conflicts = repository.findConflicts(items)
                 if (conflicts.isNotEmpty()) {
                     pendingImport = items
@@ -152,13 +156,15 @@ class SkillViewModel(
         viewModelScope.launch {
             val selected = skills.value.filter { it.id in skillIds }
             val result = runCatching {
-                context.contentResolver.openOutputStream(uri)?.use { stream ->
-                    if (selected.size == 1) {
-                        repository.exportSingle(stream, selected.first())
-                    } else {
-                        repository.exportBatch(stream, selected)
-                    }
-                } ?: throw IllegalStateException("无法写入所选位置")
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { stream ->
+                        if (selected.size == 1) {
+                            repository.exportSingle(stream, selected.first())
+                        } else {
+                            repository.exportBatch(stream, selected)
+                        }
+                    } ?: throw IllegalStateException("无法写入所选位置")
+                }
             }
             _uiState.update {
                 it.copy(

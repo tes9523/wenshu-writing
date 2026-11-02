@@ -74,7 +74,10 @@ fun AppNavHost(container: AppContainer) {
                 )
             }
             composable(Routes.LIBRARY) {
-                LibraryScreen(container = container)
+                LibraryScreen(
+                    container = container,
+                    onBack = { navController.popBackStack() }
+                )
             }
             composable(Routes.AI) {
                 AiChatScreen(
