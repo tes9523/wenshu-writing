@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Card
@@ -40,7 +41,8 @@ import com.wenshu.writing.domain.model.ThemeMode
 @Composable
 fun SettingsScreen(
     container: AppContainer,
-    onOpenAiProviders: () -> Unit
+    onOpenAiProviders: () -> Unit,
+    onOpenSkills: () -> Unit
 ) {
     val viewModel: SettingsViewModel = viewModel(
         factory = SettingsViewModel.factory(container.preferencesRepository)
@@ -140,6 +142,46 @@ fun SettingsScreen(
             }
             item {
                 Card(
+                    onClick = onOpenSkills,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.AutoAwesome,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "写作技能管理",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "管理注入系统提示词的 Skill，支持分组开关、搜索筛选与 zip 导入导出。",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            item {
+                Card(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surface
                     ),
@@ -152,7 +194,7 @@ fun SettingsScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "书稿、章节、人物卡与世界观设定均保存在本机数据库；卸载应用会清除全部数据。",
+                            text = "书稿、章节、人物卡、世界观设定与备忘录均保存在本机数据库；卸载应用会清除全部数据。",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -189,7 +231,7 @@ fun SettingsScreen(
                             )
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                text = "版本 1.0.2 · 本地优先的长篇小说写作工具",
+                                text = "版本 1.0.3 · 本地优先的长篇小说写作工具",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

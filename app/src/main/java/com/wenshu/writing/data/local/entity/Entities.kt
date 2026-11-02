@@ -77,6 +77,30 @@ data class AiProfileEntity(
     val updatedAt: Long = 0L
 )
 
+/** 灵感备忘录 */
+@Entity(tableName = "memo_notes")
+data class MemoNoteEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val title: String,
+    val content: String = "",
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+/** 写作技能，referencesJson 以 JSON 数组保存参考素材列表。 */
+@Entity(tableName = "skills")
+data class SkillEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val name: String,
+    val description: String = "",
+    val mainMarkdown: String = "",
+    val referencesJson: String = "",
+    @ColumnInfo(defaultValue = "0") val isBuiltIn: Boolean = false,
+    @ColumnInfo(defaultValue = "1") val enabled: Boolean = true,
+    val createdAt: Long = 0L,
+    val updatedAt: Long = 0L
+)
+
 @Entity(tableName = "app_settings")
 data class AppSettingsEntity(
     @PrimaryKey val id: Int = 0,

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -62,6 +64,7 @@ import com.wenshu.writing.domain.model.Chapter
 import com.wenshu.writing.domain.model.ChatMessage
 import com.wenshu.writing.domain.model.ChatRole
 import com.wenshu.writing.domain.model.Novel
+import com.wenshu.writing.domain.model.Skill
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,6 +76,7 @@ fun AiChatScreen(
         factory = AiChatViewModel.factory(
             preferencesRepository = container.preferencesRepository,
             novelRepository = container.novelRepository,
+            skillRepository = container.skillRepository,
             aiClient = container.aiClient
         )
     )
@@ -153,6 +157,15 @@ fun AiChatScreen(
                 if (state.isSending) {
                     item(key = "typing") { TypingBubble() }
                 }
+            }
+
+            if (state.mentionQuery != null) {
+                SkillMentionPanel(
+                    query = state.mentionQuery.orEmpty(),
+                    results = state.mentionResults,
+                    onSelect = viewModel::selectMentionSkill,
+                    onDismiss = viewModel::dismissMentionPanel
+                )
             }
 
             InputBar(
@@ -431,6 +444,107 @@ private fun TypingBubble() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SkillMentionPanel(
+    query: String,
+    results: List<Skill>,
+    onSelect: (Long) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 3.dp,
+        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(start = 12.dp, end = 6.dp, top = 4.dp, bottom = 6.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Outlined.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "选择要激活的 Skill",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        Icons.Outlined.Close,
+                        contentDescription = "关闭技能面板",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            if (results.isEmpty()) {
+                Text(
+                    text = "没有匹配的 Skill，可继续输入关键字筛选",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 14.dp)
+                )
+            } else {
+                LazyColumn(modifier = Modifier.heightIn(max = 220.dp)) {
+                    items(items = results, key = { it.id }) { skill ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(skill.id) }
+                                .padding(horizontal = 8.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Outlined.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = skill.name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = skill.description.ifBlank { "暂无简介" },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            if (skill.enabled) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "已激活",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text(
+                text = if (query.isBlank()) "输入文字可筛选 Skill" else "继续输入可筛选",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 8.dp, top = 2.dp)
+            )
         }
     }
 }

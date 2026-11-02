@@ -6,12 +6,14 @@ import androidx.lifecycle.viewModelScope
 import com.wenshu.writing.data.remote.AiClient
 import com.wenshu.writing.data.repository.NovelRepository
 import com.wenshu.writing.data.repository.PreferencesRepository
+import com.wenshu.writing.data.repository.SkillRepository
 import com.wenshu.writing.domain.model.AiConfig
 import com.wenshu.writing.domain.model.ApiProviderType
 import com.wenshu.writing.domain.model.Chapter
 import com.wenshu.writing.domain.model.ChatMessage
 import com.wenshu.writing.domain.model.ChatRole
 import com.wenshu.writing.domain.model.Novel
+import com.wenshu.writing.domain.model.Skill
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,12 +37,16 @@ data class AiChatUiState(
     val chapters: List<Chapter> = emptyList(),
     val selectedNovelId: Long? = null,
     val selectedChapterId: Long? = null,
+    val skills: List<Skill> = emptyList(),
+    val mentionQuery: String? = null,
+    val mentionResults: List<Skill> = emptyList(),
     val message: String? = null
 )
 
 class AiChatViewModel(
     private val preferencesRepository: PreferencesRepository,
     private val novelRepository: NovelRepository,
+    private val skillRepository: SkillRepository,
     private val aiClient: AiClient
 ) : ViewModel() {
 
@@ -69,6 +75,22 @@ class AiChatViewModel(
                         )
                     }
                 }
+        }
+
+        viewModelScope.launch {
+            skillRepository.skills.collect { skills ->
+                _uiState.update { current ->
+                    val query = current.mentionQuery
+                    current.copy(
+                        skills = skills,
+                        mentionResults = if (query == null) {
+                            emptyList()
+                        } else {
+                            filterMentionSkills(skills, query)
+                        }
+                    )
+                }
+            }
         }
 
         viewModelScope.launch {
@@ -109,7 +131,43 @@ class AiChatViewModel(
     }
 
     fun updateInput(value: String) {
-        _uiState.update { it.copy(input = value) }
+        _uiState.update { state ->
+            val query = mentionQueryOf(value)
+            state.copy(
+                input = value,
+                mentionQuery = query,
+                mentionResults = if (query == null) {
+                    emptyList()
+                } else {
+                    filterMentionSkills(state.skills, query)
+                }
+            )
+        }
+    }
+
+    /** 选中 @ 面板中的 Skill：移除输入中的 @ 片段，并立即把该技能标记为激活。 */
+    fun selectMentionSkill(skillId: Long) {
+        val state = _uiState.value
+        val skill = state.skills.firstOrNull { it.id == skillId } ?: return
+        val atIndex = state.input.lastIndexOf('@')
+        val newInput = if (atIndex >= 0) state.input.substring(0, atIndex) else state.input
+
+        _uiState.update { current ->
+            current.copy(
+                input = newInput,
+                mentionQuery = null,
+                mentionResults = emptyList(),
+                skills = current.skills.map {
+                    if (it.id == skillId) it.copy(enabled = true) else it
+                },
+                message = "已激活技能「${skill.name}」"
+            )
+        }
+        viewModelScope.launch { skillRepository.setEnabled(skillId, true) }
+    }
+
+    fun dismissMentionPanel() {
+        _uiState.update { it.copy(mentionQuery = null, mentionResults = emptyList()) }
     }
 
     fun selectNovel(novelId: Long) {
@@ -134,7 +192,13 @@ class AiChatViewModel(
 
         val userMessage = ChatMessage(id = nextMessageId++, role = ChatRole.USER, content = text)
         _uiState.update {
-            it.copy(messages = it.messages + userMessage, input = "", isSending = true)
+            it.copy(
+                messages = it.messages + userMessage,
+                input = "",
+                isSending = true,
+                mentionQuery = null,
+                mentionResults = emptyList()
+            )
         }
 
         val config = AiConfig(
@@ -143,8 +207,13 @@ class AiChatViewModel(
             model = state.model.trim(),
             apiType = state.apiType
         )
+        val systemPrompt = buildSystemPrompt(state.skills)
         viewModelScope.launch {
-            val result = aiClient.chat(config = config, history = _uiState.value.messages)
+            val result = aiClient.chat(
+                config = config,
+                history = _uiState.value.messages,
+                systemPrompt = systemPrompt
+            )
             result.onSuccess { reply ->
                 _uiState.update {
                     it.copy(
@@ -203,14 +272,57 @@ class AiChatViewModel(
     }
 
     companion object {
+        /** 取出输入框末尾正在输入的 @ 关键字；不处于 @ 语境时返回 null。 */
+        private fun mentionQueryOf(text: String): String? {
+            val atIndex = text.lastIndexOf('@')
+            if (atIndex < 0) return null
+            val before = text.getOrNull(atIndex - 1)
+            if (before != null && !before.isWhitespace()) return null
+            val query = text.substring(atIndex + 1)
+            if (query.any { it.isWhitespace() }) return null
+            return query
+        }
+
+        private fun filterMentionSkills(skills: List<Skill>, query: String): List<Skill> {
+            val keyword = query.trim()
+            return skills
+                .filter {
+                    keyword.isEmpty() ||
+                        it.name.contains(keyword, ignoreCase = true) ||
+                        it.description.contains(keyword, ignoreCase = true)
+                }
+        }
+
+        /** 合并所有已激活 Skill 的主提示词与参考素材，追加到系统提示词后。 */
+        private fun buildSystemPrompt(skills: List<Skill>): String {
+            val active = skills.filter { it.enabled }
+            if (active.isEmpty()) return AiClient.DEFAULT_SYSTEM_PROMPT
+            return buildString {
+                append(AiClient.DEFAULT_SYSTEM_PROMPT)
+                appendLine()
+                appendLine()
+                appendLine("以下是当前已激活的写作技能，请在回答时严格遵循：")
+                active.forEach { skill ->
+                    appendLine(skill.toPromptSection())
+                    appendLine()
+                }
+            }
+        }
+
         fun factory(
             preferencesRepository: PreferencesRepository,
             novelRepository: NovelRepository,
+            skillRepository: SkillRepository,
             aiClient: AiClient
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                AiChatViewModel(preferencesRepository, novelRepository, aiClient) as T
+                AiChatViewModel(
+                    preferencesRepository,
+                    novelRepository,
+                    skillRepository,
+                    aiClient
+                ) as T
         }
     }
 }

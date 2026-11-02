@@ -1,6 +1,7 @@
 package com.wenshu.writing.feature.ai
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,11 +14,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -61,10 +65,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -77,6 +83,8 @@ import com.wenshu.writing.domain.model.AiProfile
 import com.wenshu.writing.domain.model.ApiConnStatus
 import com.wenshu.writing.domain.model.ApiProviderType
 import com.wenshu.writing.ui.components.ConfirmDeleteDialog
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val ConnectedGreen = Color(0xFF2E7D32)
 private val CheckingAmber = Color(0xFFF9A825)
@@ -124,7 +132,8 @@ fun AiProviderScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                .imePadding(),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -367,7 +376,9 @@ private fun ProviderEditorCard(
                 label = { Text("名称") },
                 placeholder = { Text("如：智谱 GLM / 备用服务") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusBringIntoView()
             )
 
             Spacer(Modifier.height(8.dp))
@@ -377,7 +388,9 @@ private fun ProviderEditorCard(
                 label = { Text("API 地址") },
                 placeholder = { Text("https://api.openai.com/v1") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusBringIntoView()
             )
 
             Spacer(Modifier.height(12.dp))
@@ -431,7 +444,9 @@ private fun ProviderEditorCard(
                         )
                     }
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusBringIntoView()
             )
 
             Spacer(Modifier.height(8.dp))
@@ -451,6 +466,7 @@ private fun ProviderEditorCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .menuAnchor(MenuAnchorType.PrimaryEditable)
+                        .focusBringIntoView()
                 )
                 ExposedDropdownMenu(
                     expanded = modelMenuExpanded,
@@ -528,7 +544,9 @@ private fun ProviderEditorCard(
                         )
                     },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusBringIntoView()
                 )
                 Spacer(Modifier.height(4.dp))
                 if (filteredModels.isEmpty()) {
@@ -706,4 +724,25 @@ private fun statusLabel(status: ApiConnStatus): String = when (status) {
     ApiConnStatus.FAILURE, ApiConnStatus.TIMEOUT -> "连接失败"
     ApiConnStatus.CHECKING -> "校验中"
     ApiConnStatus.UNVERIFIED -> "未校验"
+}
+
+/**
+ * 输入框获得焦点后，等输入法弹出并完成布局变化，再把该输入框滚动到可视区域，
+ * 避免它被软键盘遮挡。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun Modifier.focusBringIntoView(): Modifier {
+    val requester = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
+    return this
+        .bringIntoViewRequester(requester)
+        .onFocusChanged { focusState ->
+            if (focusState.isFocused) {
+                scope.launch {
+                    delay(220)
+                    requester.bringIntoView()
+                }
+            }
+        }
 }

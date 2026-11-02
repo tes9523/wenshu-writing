@@ -103,6 +103,67 @@ data class AppSettings(
     val activeAiProfileId: Long = -1L
 )
 
+/** 灵感备忘录（纯文本） */
+data class MemoNote(
+    val id: Long = 0L,
+    val title: String = "",
+    val content: String = "",
+    val createdAt: Long = 0L,
+    val updatedAt: Long = 0L
+) {
+    val displayTitle: String get() = title.ifBlank { "无标题笔记" }
+
+    val preview: String
+        get() = content.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString(" ")
+            .take(120)
+}
+
+/** Skill 的参考素材文件（references 目录下的 md / txt） */
+data class SkillReference(
+    val name: String,
+    val content: String
+)
+
+/**
+ * 写作技能。mainMarkdown 为主提示词，references 为按需注入的参考素材。
+ * 内置技能随应用预置，自定义技能由用户新建或导入。
+ */
+data class Skill(
+    val id: Long = 0L,
+    val name: String,
+    val description: String = "",
+    val mainMarkdown: String = "",
+    val references: List<SkillReference> = emptyList(),
+    val isBuiltIn: Boolean = false,
+    val enabled: Boolean = true,
+    val createdAt: Long = 0L,
+    val updatedAt: Long = 0L
+) {
+    /** 合并为注入系统提示词的一段文本。 */
+    fun toPromptSection(): String = buildString {
+        appendLine("## 技能：$name")
+        if (description.isNotBlank()) appendLine(description)
+        if (mainMarkdown.isNotBlank()) appendLine(stripFrontMatter(mainMarkdown))
+        references.forEach { reference ->
+            appendLine("### 参考素材：${reference.name}")
+            appendLine(reference.content)
+        }
+    }
+}
+
+/** 去除 Skill 主文件开头的 YAML frontmatter，避免注入时产生噪声。 */
+fun stripFrontMatter(markdown: String): String {
+    val trimmed = markdown.trimStart()
+    if (!trimmed.startsWith("---")) return markdown
+    val end = trimmed.indexOf("\n---", startIndex = 3)
+    if (end < 0) return markdown
+    val after = trimmed.substring(end + 4)
+    return after.trimStart('\n', '\r')
+}
+
 enum class ChatRole {
     USER, ASSISTANT
 }

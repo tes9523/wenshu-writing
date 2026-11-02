@@ -1,0 +1,176 @@
+package com.wenshu.writing.feature.memo
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Lightbulb
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.wenshu.writing.di.AppContainer
+import com.wenshu.writing.domain.model.MemoNote
+import com.wenshu.writing.ui.components.ConfirmDeleteDialog
+import com.wenshu.writing.ui.components.EmptyState
+import com.wenshu.writing.ui.util.formatShortTimestamp
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MemoScreen(
+    container: AppContainer,
+    onOpenNote: (Long) -> Unit
+) {
+    val viewModel: MemoViewModel = viewModel(
+        factory = MemoViewModel.factory(container.memoRepository)
+    )
+    val notes by viewModel.notes.collectAsStateWithLifecycle()
+    var noteToDelete by remember { mutableStateOf<MemoNote?>(null) }
+
+    Scaffold(
+        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
+        topBar = {
+            TopAppBar(title = { Text("备忘录", style = MaterialTheme.typography.titleLarge) })
+        },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick = { viewModel.createNote { id -> onOpenNote(id) } },
+                icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
+                text = { Text("新建笔记") }
+            )
+        }
+    ) { innerPadding ->
+        if (notes.isEmpty()) {
+            EmptyState(
+                icon = Icons.Outlined.Lightbulb,
+                title = "还没有灵感笔记",
+                message = "随手记下人物、对白、桥段与设定灵感，内容会自动保存在本机。",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                action = {
+                    androidx.compose.material3.Button(
+                        onClick = { viewModel.createNote { id -> onOpenNote(id) } }
+                    ) {
+                        Icon(
+                            Icons.Outlined.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("新建笔记")
+                    }
+                }
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 100.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(items = notes, key = { it.id }) { note ->
+                    MemoCard(
+                        note = note,
+                        onClick = { onOpenNote(note.id) },
+                        onDelete = { noteToDelete = note }
+                    )
+                }
+            }
+        }
+    }
+
+    noteToDelete?.let { note ->
+        ConfirmDeleteDialog(
+            title = "删除笔记",
+            message = "确定删除「${note.displayTitle}」吗？此操作不可恢复。",
+            onConfirm = {
+                viewModel.deleteNote(note.id)
+                noteToDelete = null
+            },
+            onDismiss = { noteToDelete = null }
+        )
+    }
+}
+
+@Composable
+private fun MemoCard(
+    note: MemoNote,
+    onClick: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 4.dp, top = 14.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = note.displayTitle,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (note.preview.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = note.preview,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = formatShortTimestamp(note.createdAt),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Outlined.DeleteOutline,
+                    contentDescription = "删除笔记",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}

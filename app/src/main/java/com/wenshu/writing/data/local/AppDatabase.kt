@@ -8,14 +8,18 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.wenshu.writing.data.local.dao.ChapterDao
 import com.wenshu.writing.data.local.dao.LibraryDao
+import com.wenshu.writing.data.local.dao.MemoDao
 import com.wenshu.writing.data.local.dao.NovelDao
 import com.wenshu.writing.data.local.dao.SettingsDao
+import com.wenshu.writing.data.local.dao.SkillDao
 import com.wenshu.writing.data.local.entity.AiConfigEntity
 import com.wenshu.writing.data.local.entity.AiProfileEntity
 import com.wenshu.writing.data.local.entity.AppSettingsEntity
 import com.wenshu.writing.data.local.entity.ChapterEntity
 import com.wenshu.writing.data.local.entity.CharacterEntity
+import com.wenshu.writing.data.local.entity.MemoNoteEntity
 import com.wenshu.writing.data.local.entity.NovelEntity
+import com.wenshu.writing.data.local.entity.SkillEntity
 import com.wenshu.writing.data.local.entity.WorldSettingEntity
 
 @Database(
@@ -26,9 +30,11 @@ import com.wenshu.writing.data.local.entity.WorldSettingEntity
         WorldSettingEntity::class,
         AiConfigEntity::class,
         AiProfileEntity::class,
-        AppSettingsEntity::class
+        AppSettingsEntity::class,
+        MemoNoteEntity::class,
+        SkillEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -37,6 +43,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun chapterDao(): ChapterDao
     abstract fun libraryDao(): LibraryDao
     abstract fun settingsDao(): SettingsDao
+    abstract fun memoDao(): MemoDao
+    abstract fun skillDao(): SkillDao
 
     companion object {
         private const val DATABASE_NAME = "wenshu_writing.db"
@@ -84,6 +92,32 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** 1.0.2 -> 1.0.3：新增备忘录与写作技能表，不影响既有书稿、设定库与 AI 配置。 */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `memo_notes` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`title` TEXT NOT NULL, " +
+                        "`content` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `skills` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`description` TEXT NOT NULL, " +
+                        "`mainMarkdown` TEXT NOT NULL, " +
+                        "`referencesJson` TEXT NOT NULL, " +
+                        "`isBuiltIn` INTEGER NOT NULL DEFAULT 0, " +
+                        "`enabled` INTEGER NOT NULL DEFAULT 1, " +
+                        "`createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL)"
+                )
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -94,7 +128,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     DATABASE_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { instance = it }
             }

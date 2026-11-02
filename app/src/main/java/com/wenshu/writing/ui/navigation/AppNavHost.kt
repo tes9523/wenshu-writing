@@ -1,6 +1,8 @@
 package com.wenshu.writing.ui.navigation
 
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -23,16 +25,23 @@ import com.wenshu.writing.feature.ai.AiChatScreen
 import com.wenshu.writing.feature.ai.AiProviderScreen
 import com.wenshu.writing.feature.editor.ChapterEditorScreen
 import com.wenshu.writing.feature.library.LibraryScreen
+import com.wenshu.writing.feature.memo.MemoEditorScreen
+import com.wenshu.writing.feature.memo.MemoScreen
 import com.wenshu.writing.feature.settings.SettingsScreen
+import com.wenshu.writing.feature.skill.SkillEditorScreen
+import com.wenshu.writing.feature.skill.SkillScreen
 import com.wenshu.writing.feature.works.ChapterListScreen
 import com.wenshu.writing.feature.works.WorksScreen
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AppNavHost(container: AppContainer) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
-    val showBottomBar = topLevelDestinations.any { it.route == currentRoute }
+    // 输入法弹出时隐藏底部导航栏，避免它的高度叠加到 imePadding 上产生大片空白。
+    val imeVisible = WindowInsets.isImeVisible
+    val showBottomBar = topLevelDestinations.any { it.route == currentRoute } && !imeVisible
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -78,7 +87,49 @@ fun AppNavHost(container: AppContainer) {
                         navController.navigate(Routes.AI_PROVIDERS) {
                             launchSingleTop = true
                         }
+                    },
+                    onOpenSkills = {
+                        navController.navigate(Routes.SKILLS) {
+                            launchSingleTop = true
+                        }
                     }
+                )
+            }
+            composable(Routes.MEMO) {
+                MemoScreen(
+                    container = container,
+                    onOpenNote = { noteId ->
+                        navController.navigate(Routes.memoEditor(noteId))
+                    }
+                )
+            }
+            composable(
+                route = Routes.MEMO_EDITOR,
+                arguments = listOf(navArgument("noteId") { type = NavType.LongType })
+            ) { entry ->
+                MemoEditorScreen(
+                    container = container,
+                    noteId = entry.arguments?.getLong("noteId") ?: 0L,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable(Routes.SKILLS) {
+                SkillScreen(
+                    container = container,
+                    onBack = { navController.popBackStack() },
+                    onOpenSkill = { skillId ->
+                        navController.navigate(Routes.skillEditor(skillId))
+                    }
+                )
+            }
+            composable(
+                route = Routes.SKILL_EDITOR,
+                arguments = listOf(navArgument("skillId") { type = NavType.LongType })
+            ) { entry ->
+                SkillEditorScreen(
+                    container = container,
+                    skillId = entry.arguments?.getLong("skillId") ?: 0L,
+                    onBack = { navController.popBackStack() }
                 )
             }
             composable(Routes.AI_PROVIDERS) {
