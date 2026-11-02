@@ -5,8 +5,15 @@ import com.wenshu.writing.domain.model.AiProfile
 import com.wenshu.writing.domain.model.ApiProviderType
 import com.wenshu.writing.domain.model.CharacterCard
 import com.wenshu.writing.domain.model.Chapter
+import com.wenshu.writing.domain.model.ChapterTask
+import com.wenshu.writing.domain.model.ChatMessage
+import com.wenshu.writing.domain.model.ChatRole
+import com.wenshu.writing.domain.model.ChatSession
 import com.wenshu.writing.domain.model.MemoNote
 import com.wenshu.writing.domain.model.Novel
+import com.wenshu.writing.domain.model.Outline
+import com.wenshu.writing.domain.model.PipelineRun
+import com.wenshu.writing.domain.model.PipelineStatus
 import com.wenshu.writing.domain.model.Skill
 import com.wenshu.writing.domain.model.SkillReference
 import com.wenshu.writing.domain.model.WorldSetting
@@ -37,6 +44,7 @@ fun CharacterEntity.toModel() = CharacterCard(
     name = name,
     role = role,
     description = description,
+    bookId = bookId,
     createdAt = createdAt,
     updatedAt = updatedAt
 )
@@ -46,6 +54,7 @@ fun WorldSettingEntity.toModel() = WorldSetting(
     category = category,
     title = title,
     content = content,
+    bookId = bookId,
     createdAt = createdAt,
     updatedAt = updatedAt
 )
@@ -88,6 +97,7 @@ fun MemoNoteEntity.toModel() = MemoNote(
     id = id,
     title = title,
     content = content,
+    bookId = bookId,
     createdAt = createdAt,
     updatedAt = updatedAt
 )
@@ -96,6 +106,7 @@ fun MemoNote.toEntity() = MemoNoteEntity(
     id = id,
     title = title,
     content = content,
+    bookId = bookId,
     createdAt = createdAt,
     updatedAt = updatedAt
 )
@@ -113,6 +124,7 @@ fun SkillEntity.toModel() = Skill(
     references = decodeReferences(referencesJson),
     isBuiltIn = isBuiltIn,
     enabled = enabled,
+    isPipeline = isPipeline,
     createdAt = createdAt,
     updatedAt = updatedAt
 )
@@ -125,6 +137,113 @@ fun Skill.toEntity() = SkillEntity(
     referencesJson = encodeReferences(references),
     isBuiltIn = isBuiltIn,
     enabled = enabled,
+    isPipeline = isPipeline,
+    createdAt = createdAt,
+    updatedAt = updatedAt
+)
+
+fun ChatSessionEntity.toModel() = ChatSession(
+    id = id,
+    title = title,
+    bookId = bookId,
+    createdAt = createdAt,
+    updatedAt = updatedAt
+)
+
+fun ChatSession.toEntity() = ChatSessionEntity(
+    id = id,
+    title = title,
+    bookId = bookId,
+    createdAt = createdAt,
+    updatedAt = updatedAt
+)
+
+fun ChatMessageEntity.toModel() = ChatMessage(
+    id = id,
+    role = runCatching { ChatRole.valueOf(role) }.getOrDefault(ChatRole.ASSISTANT),
+    content = content,
+    isError = isError,
+    createdAt = createdAt
+)
+
+fun ChatMessage.toEntity(sessionId: Long) = ChatMessageEntity(
+    id = id,
+    sessionId = sessionId,
+    role = role.name,
+    content = content,
+    isError = isError,
+    createdAt = createdAt
+)
+
+fun OutlineEntity.toModel() = Outline(
+    id = id,
+    novelId = novelId,
+    title = title,
+    content = content,
+    kind = kind,
+    createdAt = createdAt,
+    updatedAt = updatedAt
+)
+
+fun Outline.toEntity() = OutlineEntity(
+    id = id,
+    novelId = novelId,
+    title = title,
+    content = content,
+    kind = kind,
+    createdAt = createdAt,
+    updatedAt = updatedAt
+)
+
+fun ChapterTaskEntity.toModel() = ChapterTask(
+    id = id,
+    novelId = novelId,
+    orderIndex = orderIndex,
+    title = title,
+    goal = goal,
+    conflict = conflict,
+    infoIncrement = infoIncrement,
+    payoff = payoff,
+    hook = hook,
+    createdAt = createdAt,
+    updatedAt = updatedAt
+)
+
+fun ChapterTask.toEntity() = ChapterTaskEntity(
+    id = id,
+    novelId = novelId,
+    orderIndex = orderIndex,
+    title = title,
+    goal = goal,
+    conflict = conflict,
+    infoIncrement = infoIncrement,
+    payoff = payoff,
+    hook = hook,
+    createdAt = createdAt,
+    updatedAt = updatedAt
+)
+
+fun PipelineRunEntity.toModel() = PipelineRun(
+    id = id,
+    novelId = novelId,
+    skillId = skillId,
+    stage = stage,
+    status = runCatching { PipelineStatus.valueOf(status) }
+        .getOrDefault(PipelineStatus.PAUSED),
+    inputJson = inputJson,
+    outputJson = outputJson,
+    createdAt = createdAt,
+    updatedAt = updatedAt
+)
+
+fun PipelineRun.toEntity() = PipelineRunEntity(
+    id = id,
+    novelId = novelId,
+    skillId = skillId,
+    stage = stage,
+    status = status.name,
+    inputJson = inputJson,
+    outputJson = outputJson,
     createdAt = createdAt,
     updatedAt = updatedAt
 )

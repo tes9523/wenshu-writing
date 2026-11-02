@@ -27,6 +27,8 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -63,6 +65,7 @@ import com.wenshu.writing.di.AppContainer
 import com.wenshu.writing.domain.model.Chapter
 import com.wenshu.writing.domain.model.ChatMessage
 import com.wenshu.writing.domain.model.ChatRole
+import com.wenshu.writing.domain.model.ChatSession
 import com.wenshu.writing.domain.model.Novel
 import com.wenshu.writing.domain.model.Skill
 
@@ -70,19 +73,32 @@ import com.wenshu.writing.domain.model.Skill
 @Composable
 fun AiChatScreen(
     container: AppContainer,
-    onOpenProviders: () -> Unit
+    onOpenProviders: () -> Unit,
+    onOpenPipeline: (novelId: Long, skillId: Long) -> Unit
 ) {
     val viewModel: AiChatViewModel = viewModel(
         factory = AiChatViewModel.factory(
             preferencesRepository = container.preferencesRepository,
             novelRepository = container.novelRepository,
             skillRepository = container.skillRepository,
+            chatRepository = container.chatRepository,
             aiClient = container.aiClient
         )
     )
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(state.pipelineSkill) {
+        val skill = state.pipelineSkill ?: return@LaunchedEffect
+        viewModel.consumePipelineSkill()
+        val novelId = state.selectedNovelId
+        if (novelId == null) {
+            snackbarHostState.showSnackbar("请先在「书稿」中新建一本书，再启用该流水线技能")
+        } else {
+            onOpenPipeline(novelId, skill.id)
+        }
+    }
 
     LaunchedEffect(state.message) {
         val message = state.message ?: return@LaunchedEffect
@@ -99,12 +115,27 @@ fun AiChatScreen(
         }
     }
 
+    val activeSession = state.sessions.firstOrNull { it.id == state.activeSessionId }
+
     Scaffold(
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         topBar = {
             TopAppBar(
-                title = { Text("AI 对话", style = MaterialTheme.typography.titleLarge) },
+                title = {
+                    Text(
+                        text = activeSession?.title ?: "AI 对话",
+                        style = MaterialTheme.typography.titleLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
                 actions = {
+                    IconButton(onClick = viewModel::openSessionList) {
+                        Icon(Icons.Outlined.History, contentDescription = "会话列表")
+                    }
+                    IconButton(onClick = { viewModel.createSession(state.selectedNovelId) }) {
+                        Icon(Icons.Outlined.Add, contentDescription = "新建会话")
+                    }
                     if (state.messages.isNotEmpty()) {
                         IconButton(onClick = viewModel::clearConversation) {
                             Icon(Icons.Outlined.DeleteOutline, contentDescription = "清空对话")
@@ -176,6 +207,111 @@ fun AiChatScreen(
             )
         }
     }
+
+    if (state.showSessionList) {
+        SessionListDialog(
+            sessions = state.sessions,
+            novels = state.novels,
+            activeSessionId = state.activeSessionId,
+            selectedNovelId = state.selectedNovelId,
+            onSelect = viewModel::selectSession,
+            onDelete = viewModel::deleteSession,
+            onCreateBookSession = { viewModel.createSession(state.selectedNovelId) },
+            onCreateGlobalSession = { viewModel.createSession(null) },
+            onDismiss = viewModel::closeSessionList
+        )
+    }
+}
+
+/** 会话列表：支持切换、删除、新建本书专属会话或全局会话。 */
+@Composable
+private fun SessionListDialog(
+    sessions: List<ChatSession>,
+    novels: List<Novel>,
+    activeSessionId: Long?,
+    selectedNovelId: Long?,
+    onSelect: (Long) -> Unit,
+    onDelete: (Long) -> Unit,
+    onCreateBookSession: () -> Unit,
+    onCreateGlobalSession: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val bookTitle = novels.firstOrNull { it.id == selectedNovelId }?.title
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("AI 会话") },
+        text = {
+            Column {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = onCreateBookSession,
+                        enabled = selectedNovelId != null
+                    ) {
+                        Text(
+                            text = if (bookTitle == null) "新建本书会话" else "新建《$bookTitle》会话",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    TextButton(onClick = onCreateGlobalSession) { Text("全局会话") }
+                }
+                Spacer(Modifier.height(6.dp))
+                if (sessions.isEmpty()) {
+                    Text(
+                        text = "还没有会话。发送第一条消息后会自动创建并永久保存。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                        items(items = sessions, key = { it.id }) { session ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onSelect(session.id) }
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = session.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = if (session.id == activeSessionId) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        }
+                                    )
+                                    Text(
+                                        text = session.bookId
+                                            ?.let { id -> novels.firstOrNull { it.id == id }?.title }
+                                            ?.let { "本书会话 ·《$it》" }
+                                            ?: "全局会话",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(onClick = { onDelete(session.id) }) {
+                                    Icon(
+                                        Icons.Outlined.DeleteOutline,
+                                        contentDescription = "删除会话",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        }
+    )
 }
 
 @Composable

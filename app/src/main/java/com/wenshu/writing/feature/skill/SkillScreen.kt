@@ -1,6 +1,7 @@
 package com.wenshu.writing.feature.skill
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -113,7 +114,7 @@ fun SkillScreen(
     LaunchedEffect(state.message) {
         val message = state.message ?: return@LaunchedEffect
         viewModel.consumeMessage()
-        snackbarHostState.showSnackbar(message)
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
     }
 
     Scaffold(
@@ -297,6 +298,34 @@ fun SkillScreen(
                 deleteTarget = null
             },
             onDismiss = { deleteTarget = null }
+        )
+    }
+
+    if (state.showConflictDialog) {
+        AlertDialog(
+            onDismissRequest = viewModel::cancelImport,
+            title = { Text("检测到同名 Skill") },
+            text = {
+                Column {
+                    Text("以下 Skill 已存在，是否覆盖导入？")
+                    Spacer(Modifier.height(8.dp))
+                    state.conflictNames.forEach { name ->
+                        Text(
+                            text = "· $name",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::confirmOverwriteImport) {
+                    Text("覆盖导入")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::cancelImport) { Text("取消导入") }
+            }
         )
     }
 

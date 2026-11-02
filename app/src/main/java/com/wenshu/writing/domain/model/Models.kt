@@ -22,22 +22,24 @@ data class Chapter(
     val wordCount: Int get() = countCharacters(content)
 }
 
-/** 人物卡 */
+/** 人物卡。bookId 为 null 表示全局公共素材，不参与任何单本书稿的自动读写。 */
 data class CharacterCard(
     val id: Long = 0L,
     val name: String,
     val role: String = "",
     val description: String = "",
+    val bookId: Long? = null,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L
 )
 
-/** 世界观设定 */
+/** 世界观设定。bookId 为 null 表示全局公共素材。 */
 data class WorldSetting(
     val id: Long = 0L,
     val category: String = "",
     val title: String,
     val content: String = "",
+    val bookId: Long? = null,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L
 )
@@ -100,14 +102,17 @@ enum class ThemeMode {
 
 data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    val activeAiProfileId: Long = -1L
+    val activeAiProfileId: Long = -1L,
+    /** 当前激活书稿；-1 表示未选择，UI 会回落到「全局公共素材」。 */
+    val activeNovelId: Long = -1L
 )
 
-/** 灵感备忘录（纯文本） */
+/** 灵感备忘录（纯文本）。bookId 为 null 表示全局公共备忘录。 */
 data class MemoNote(
     val id: Long = 0L,
     val title: String = "",
     val content: String = "",
+    val bookId: Long? = null,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L
 ) {
@@ -139,6 +144,8 @@ data class Skill(
     val references: List<SkillReference> = emptyList(),
     val isBuiltIn: Boolean = false,
     val enabled: Boolean = true,
+    /** 内置流水线技能（如「开启新书」），在 @ 面板中被选中时进入分阶段流程。 */
+    val isPipeline: Boolean = false,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L
 ) {
@@ -172,8 +179,94 @@ data class ChatMessage(
     val id: Long,
     val role: ChatRole,
     val content: String,
-    val isError: Boolean = false
+    val isError: Boolean = false,
+    val createdAt: Long = 0L
 )
+
+/** AI 对话会话。bookId 为 null 表示全局通用会话。 */
+data class ChatSession(
+    val id: Long = 0L,
+    val title: String = "新对话",
+    val bookId: Long? = null,
+    val createdAt: Long = 0L,
+    val updatedAt: Long = 0L
+)
+
+/** 书稿大纲（全书总纲 / 细纲）。 */
+data class Outline(
+    val id: Long = 0L,
+    val novelId: Long = 0L,
+    val title: String = "",
+    val content: String = "",
+    val kind: String = "outline",
+    val createdAt: Long = 0L,
+    val updatedAt: Long = 0L
+)
+
+/** 章节任务卡：正文生成前标准化任务单。 */
+data class ChapterTask(
+    val id: Long = 0L,
+    val novelId: Long = 0L,
+    val orderIndex: Int = 0,
+    val title: String = "",
+    val goal: String = "",
+    val conflict: String = "",
+    val infoIncrement: String = "",
+    val payoff: String = "",
+    val hook: String = "",
+    val createdAt: Long = 0L,
+    val updatedAt: Long = 0L
+) {
+    fun toPromptCard(): String = buildString {
+        appendLine("### 第 ${orderIndex + 1} 章：$title")
+        appendLine("本章目标：$goal")
+        appendLine("核心冲突：$conflict")
+        appendLine("信息增量：$infoIncrement")
+        appendLine("爽点设计：$payoff")
+        appendLine("章末钩子：$hook")
+    }
+}
+
+enum class PipelineStatus {
+    RUNNING, PAUSED, COMPLETED, FAILED
+}
+
+/** 流水线断点：stage 表示下一个待执行阶段（1~6）。 */
+data class PipelineRun(
+    val id: Long = 0L,
+    val novelId: Long = 0L,
+    val skillId: Long = 0L,
+    val stage: Int = 1,
+    val status: PipelineStatus = PipelineStatus.PAUSED,
+    val inputJson: String = "",
+    val outputJson: String = "",
+    val createdAt: Long = 0L,
+    val updatedAt: Long = 0L
+)
+
+/** 「开启新书」阶段 1 采集的新书信息。 */
+@kotlinx.serialization.Serializable
+data class NewBookInfo(
+    val title: String = "",
+    val genre: String = "",
+    val sellingPoint: String = "",
+    val track: String = "",
+    val coreIdea: String = "",
+    val style: String = ""
+) {
+    fun toPromptText(): String = buildString {
+        appendLine("书名：$title")
+        appendLine("题材：$genre")
+        appendLine("卖点：$sellingPoint")
+        appendLine("目标赛道：$track")
+        appendLine("核心创意：$coreIdea")
+        appendLine("风格偏好：$style")
+    }
+
+    fun isValid(): Boolean = title.isNotBlank() && genre.isNotBlank() &&
+        sellingPoint.isNotBlank() && track.isNotBlank() &&
+        coreIdea.isNotBlank() && style.isNotBlank()
+}
 
 /** 字数统计：按非空白字符计数，适配中文写作习惯 */
 fun countCharacters(text: String): Int = text.count { !it.isWhitespace() }

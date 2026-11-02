@@ -1,5 +1,8 @@
 package com.wenshu.writing.feature.works
 
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +21,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -43,6 +49,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -58,20 +65,82 @@ import com.wenshu.writing.ui.util.formatShortTimestamp
 @Composable
 fun WorksScreen(
     container: AppContainer,
-    onOpenNovel: (Long) -> Unit
+    onOpenNovel: (Long) -> Unit,
+    onOpenPipeline: (novelId: Long, skillId: Long) -> Unit
 ) {
     val viewModel: WorksViewModel = viewModel(
-        factory = WorksViewModel.factory(container.novelRepository)
+        factory = WorksViewModel.factory(
+            repository = container.novelRepository,
+            libraryRepository = container.libraryRepository,
+            memoRepository = container.memoRepository,
+            preferencesRepository = container.preferencesRepository
+        )
     )
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var novelToDelete by remember { mutableStateOf<Novel?>(null) }
+    var pendingExportNovel by remember { mutableStateOf<Novel?>(null) }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        val novel = pendingExportNovel
+        pendingExportNovel = null
+        if (uri == null || novel == null) return@rememberLauncherForActivityResult
+        val stream = runCatching { context.contentResolver.openOutputStream(uri) }.getOrNull()
+        if (stream == null) {
+            Toast.makeText(context, "无法写入文件", Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+        viewModel.exportBook(novel.id, stream) { result ->
+            result.onSuccess {
+                Toast.makeText(context, "整书导出成功", Toast.LENGTH_SHORT).show()
+            }.onFailure { error ->
+                Toast.makeText(
+                    context,
+                    error.message ?: "整书导出失败",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val stream = runCatching { context.contentResolver.openInputStream(uri) }.getOrNull()
+        if (stream == null) {
+            Toast.makeText(context, "无法读取文件", Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+        viewModel.importBook(stream) { result ->
+            result.onSuccess { novelId ->
+                Toast.makeText(context, "整书导入成功", Toast.LENGTH_SHORT).show()
+                onOpenNovel(novelId)
+            }.onFailure { error ->
+                Toast.makeText(
+                    context,
+                    error.message ?: "整书导入失败",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
 
     Scaffold(
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         topBar = {
-            TopAppBar(title = { Text("书稿", style = MaterialTheme.typography.titleLarge) })
+            TopAppBar(
+                title = { Text("书稿", style = MaterialTheme.typography.titleLarge) },
+                actions = {
+                    IconButton(onClick = { importLauncher.launch(arrayOf("application/zip")) }) {
+                        Icon(Icons.Outlined.FileUpload, contentDescription = "导入整书数据包")
+                    }
+                }
+            )
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
@@ -90,10 +159,15 @@ fun WorksScreen(
                     .fillMaxSize()
                     .padding(innerPadding),
                 action = {
-                    Button(onClick = { showCreateDialog = true }) {
-                        Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("新建小说")
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Button(onClick = { showCreateDialog = true }) {
+                            Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("新建小说")
+                        }
+                        TextButton(onClick = { importLauncher.launch(arrayOf("application/zip")) }) {
+                            Text("导入整书数据包")
+                        }
                     }
                 }
             )
@@ -108,7 +182,12 @@ fun WorksScreen(
                 items(items = state.novels, key = { it.id }) { novel ->
                     NovelCard(
                         novel = novel,
-                        onClick = { onOpenNovel(novel.id) },
+                        onClick = { viewModel.openNovel(novel.id) { onOpenNovel(novel.id) } },
+                        onStartPipeline = { onOpenPipeline(novel.id, 0L) },
+                        onExport = {
+                            pendingExportNovel = novel
+                            exportLauncher.launch(safeFileName(novel.title) + ".zip")
+                        },
                         onDelete = { novelToDelete = novel }
                     )
                 }
@@ -141,10 +220,17 @@ fun WorksScreen(
     }
 }
 
+private fun safeFileName(name: String): String {
+    val cleaned = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim()
+    return cleaned.ifBlank { "book" }
+}
+
 @Composable
 private fun NovelCard(
     novel: Novel,
     onClick: () -> Unit,
+    onStartPipeline: () -> Unit,
+    onExport: () -> Unit,
     onDelete: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -201,6 +287,22 @@ private fun NovelCard(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false }
                 ) {
+                    DropdownMenuItem(
+                        text = { Text("开启新书流水线") },
+                        leadingIcon = { Icon(Icons.Outlined.PlayArrow, contentDescription = null) },
+                        onClick = {
+                            menuExpanded = false
+                            onStartPipeline()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("导出整书数据包") },
+                        leadingIcon = { Icon(Icons.Outlined.FileDownload, contentDescription = null) },
+                        onClick = {
+                            menuExpanded = false
+                            onExport()
+                        }
+                    )
                     DropdownMenuItem(
                         text = { Text("删除作品") },
                         leadingIcon = {

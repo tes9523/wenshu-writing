@@ -37,22 +37,24 @@ data class ChapterEntity(
     val updatedAt: Long
 )
 
-@Entity(tableName = "characters")
+@Entity(tableName = "characters", indices = [Index("bookId")])
 data class CharacterEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
     val name: String,
     val role: String = "",
     val description: String = "",
+    val bookId: Long? = null,
     val createdAt: Long,
     val updatedAt: Long
 )
 
-@Entity(tableName = "world_settings")
+@Entity(tableName = "world_settings", indices = [Index("bookId")])
 data class WorldSettingEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
     val category: String = "",
     val title: String,
     val content: String = "",
+    val bookId: Long? = null,
     val createdAt: Long,
     val updatedAt: Long
 )
@@ -77,12 +79,13 @@ data class AiProfileEntity(
     val updatedAt: Long = 0L
 )
 
-/** 灵感备忘录 */
-@Entity(tableName = "memo_notes")
+/** 灵感备忘录。bookId 为 null 表示全局公共备忘录。 */
+@Entity(tableName = "memo_notes", indices = [Index("bookId")])
 data class MemoNoteEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
     val title: String,
     val content: String = "",
+    val bookId: Long? = null,
     val createdAt: Long,
     val updatedAt: Long
 )
@@ -97,6 +100,7 @@ data class SkillEntity(
     val referencesJson: String = "",
     @ColumnInfo(defaultValue = "0") val isBuiltIn: Boolean = false,
     @ColumnInfo(defaultValue = "1") val enabled: Boolean = true,
+    @ColumnInfo(defaultValue = "0") val isPipeline: Boolean = false,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L
 )
@@ -105,5 +109,68 @@ data class SkillEntity(
 data class AppSettingsEntity(
     @PrimaryKey val id: Int = 0,
     val themeMode: String = "SYSTEM",
-    @ColumnInfo(defaultValue = "-1") val activeAiProfileId: Long = -1L
+    @ColumnInfo(defaultValue = "-1") val activeAiProfileId: Long = -1L,
+    @ColumnInfo(defaultValue = "-1") val activeNovelId: Long = -1L
+)
+
+/** AI 对话会话。bookId 为 null 表示全局通用会话。 */
+@Entity(tableName = "chat_sessions", indices = [Index("bookId")])
+data class ChatSessionEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val title: String,
+    val bookId: Long? = null,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+@Entity(tableName = "chat_messages", indices = [Index("sessionId")])
+data class ChatMessageEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val sessionId: Long,
+    val role: String,
+    val content: String,
+    val isError: Boolean = false,
+    val createdAt: Long
+)
+
+/** 书稿大纲：全书总纲与前期细纲。 */
+@Entity(tableName = "outlines", indices = [Index("novelId")])
+data class OutlineEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val novelId: Long,
+    val title: String,
+    val content: String,
+    val kind: String = "outline",
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+/** 章节任务卡。 */
+@Entity(tableName = "chapter_tasks", indices = [Index("novelId")])
+data class ChapterTaskEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val novelId: Long,
+    val orderIndex: Int = 0,
+    val title: String,
+    val goal: String = "",
+    val conflict: String = "",
+    val infoIncrement: String = "",
+    val payoff: String = "",
+    val hook: String = "",
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+/** 「开启新书」流水线断点。 */
+@Entity(tableName = "pipeline_runs", indices = [Index("novelId")])
+data class PipelineRunEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val novelId: Long,
+    val skillId: Long = 0L,
+    val stage: Int = 1,
+    val status: String = "PAUSED",
+    val inputJson: String = "",
+    val outputJson: String = "",
+    val createdAt: Long,
+    val updatedAt: Long
 )

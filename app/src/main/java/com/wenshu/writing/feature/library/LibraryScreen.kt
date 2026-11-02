@@ -23,10 +23,14 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
@@ -49,6 +53,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wenshu.writing.di.AppContainer
 import com.wenshu.writing.domain.model.CharacterCard
+import com.wenshu.writing.domain.model.Novel
 import com.wenshu.writing.domain.model.WorldSetting
 import com.wenshu.writing.ui.components.ConfirmDeleteDialog
 import com.wenshu.writing.ui.components.EmptyState
@@ -58,7 +63,11 @@ import com.wenshu.writing.ui.components.InitialCover
 @Composable
 fun LibraryScreen(container: AppContainer) {
     val viewModel: LibraryViewModel = viewModel(
-        factory = LibraryViewModel.factory(container.libraryRepository)
+        factory = LibraryViewModel.factory(
+            repository = container.libraryRepository,
+            preferencesRepository = container.preferencesRepository,
+            novelRepository = container.novelRepository
+        )
     )
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -75,6 +84,11 @@ fun LibraryScreen(container: AppContainer) {
         topBar = {
             Column {
                 TopAppBar(title = { Text("设定库", style = MaterialTheme.typography.titleLarge) })
+                BookSelectorBar(
+                    novels = state.novels,
+                    activeBookId = state.activeBookId,
+                    onSelect = viewModel::selectBook
+                )
                 TabRow(selectedTabIndex = selectedTab) {
                     Tab(
                         selected = selectedTab == 0,
@@ -185,7 +199,12 @@ fun LibraryScreen(container: AppContainer) {
             onSave = { name, role, description ->
                 val initial = editingCharacter
                 val card = if (initial == null) {
-                    CharacterCard(name = name, role = role, description = description)
+                    CharacterCard(
+                        name = name,
+                        role = role,
+                        description = description,
+                        bookId = state.activeBookId
+                    )
                 } else {
                     initial.copy(name = name, role = role, description = description)
                 }
@@ -201,7 +220,12 @@ fun LibraryScreen(container: AppContainer) {
             onSave = { category, title, content ->
                 val initial = editingWorld
                 val setting = if (initial == null) {
-                    WorldSetting(category = category, title = title, content = content)
+                    WorldSetting(
+                        category = category,
+                        title = title,
+                        content = content,
+                        bookId = state.activeBookId
+                    )
                 } else {
                     initial.copy(category = category, title = title, content = content)
                 }
@@ -232,6 +256,66 @@ fun LibraryScreen(container: AppContainer) {
             },
             onDismiss = { worldToDelete = null }
         )
+    }
+}
+
+/**
+ * 书稿隔离选择器：所有人物卡与世界观只展示当前书稿的数据。
+ * 选择「全局公共素材」时显示 bookId = null 的手动素材。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BookSelectorBar(
+    novels: List<Novel>,
+    activeBookId: Long?,
+    onSelect: (Long?) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = if (activeBookId == null) {
+        "全局公共素材"
+    } else {
+        novels.firstOrNull { it.id == activeBookId }?.title ?: "全局公共素材"
+    }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+    ) {
+        OutlinedTextField(
+            value = label,
+            onValueChange = {},
+            readOnly = true,
+            singleLine = true,
+            label = { Text("当前书稿") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text("全局公共素材") },
+                onClick = {
+                    onSelect(null)
+                    expanded = false
+                }
+            )
+            novels.forEach { novel ->
+                DropdownMenuItem(
+                    text = { Text(novel.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    onClick = {
+                        onSelect(novel.id)
+                        expanded = false
+                    }
+                )
+            }
+        }
     }
 }
 

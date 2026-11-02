@@ -19,6 +19,12 @@ interface SkillDao {
     @Query("SELECT * FROM skills WHERE id = :id")
     suspend fun getById(id: Long): SkillEntity?
 
+    @Query("SELECT * FROM skills WHERE name = :name LIMIT 1")
+    suspend fun getByName(name: String): SkillEntity?
+
+    @Query("SELECT * FROM skills WHERE isPipeline = 1 ORDER BY isBuiltIn DESC, id ASC LIMIT 1")
+    suspend fun getByPipeline(): SkillEntity?
+
     @Query("SELECT COUNT(*) FROM skills WHERE isBuiltIn = 1")
     suspend fun countBuiltIn(): Int
 

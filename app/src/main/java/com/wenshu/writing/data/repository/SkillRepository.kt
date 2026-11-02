@@ -23,12 +23,18 @@ class SkillRepository(
         list.map { it.toModel() }
     }
 
-    /** 首次启动时把 assets/skills 下的内置技能写入数据库；已存在内置技能时不覆盖用户数据。 */
+    /**
+     * 把 assets/skills 下的内置技能补齐到数据库。
+     * 已存在的同名内置技能不覆盖（保留用户修改），新增的内置技能（如 1.0.4 的流水线）会自动补入。
+     */
     suspend fun ensureBuiltInSkills() {
-        if (skillDao.countBuiltIn() > 0) return
+        val existing = runCatching { skillDao.getAll().map { it.toModel() } }
+            .getOrDefault(emptyList())
         val builtIns = runCatching { loadBuiltInSkills() }.getOrDefault(emptyList())
-        if (builtIns.isNotEmpty()) {
-            withContext(Dispatchers.IO) { skillDao.insertAll(builtIns) }
+        val existingNames = existing.map { it.name }.toMutableSet()
+        val missing = builtIns.filter { it.name !in existingNames }
+        if (missing.isNotEmpty()) {
+            withContext(Dispatchers.IO) { skillDao.insertAll(missing) }
         }
     }
 
@@ -38,6 +44,10 @@ class SkillRepository(
 
     suspend fun getById(id: Long): Skill? = withContext(Dispatchers.IO) {
         skillDao.getById(id)?.toModel()
+    }
+
+    suspend fun findByPipeline(): Skill? = withContext(Dispatchers.IO) {
+        skillDao.getByPipeline()?.toModel()
     }
 
     suspend fun create(
@@ -68,6 +78,7 @@ class SkillRepository(
         skillDao.update(
             skill.copy(
                 isBuiltIn = existing.isBuiltIn,
+                isPipeline = existing.isPipeline,
                 enabled = skill.enabled,
                 createdAt = if (skill.createdAt > 0L) skill.createdAt else existing.createdAt,
                 updatedAt = System.currentTimeMillis()
@@ -83,27 +94,62 @@ class SkillRepository(
         skillDao.deleteById(id)
     }
 
-    /** 导入 zip 包，返回成功导入的技能数量。 */
-    suspend fun importZip(input: InputStream): Int = withContext(Dispatchers.IO) {
-        val imported = SkillArchive.readZip(input)
+    /** 解析 zip 包，不写库；供 UI 先检测重名并弹窗确认。 */
+    suspend fun parseImport(input: InputStream): List<SkillArchive.ImportedSkill> =
+        withContext(Dispatchers.IO) { SkillArchive.readZip(input) }
+
+    suspend fun findConflicts(items: List<SkillArchive.ImportedSkill>): List<String> =
+        withContext(Dispatchers.IO) {
+            val existingNames = skillDao.getAll().map { it.name }.toSet()
+            items.map { it.name }.filter { it in existingNames }.distinct()
+        }
+
+    /**
+     * 写入已解析的技能。overwrite=true 时同名技能覆盖内容；否则自动追加序号避免重名。
+     * 返回导入数量。
+     */
+    suspend fun importSkills(
+        items: List<SkillArchive.ImportedSkill>,
+        overwrite: Boolean
+    ): Int = withContext(Dispatchers.IO) {
+        if (items.isEmpty()) return@withContext 0
         val now = System.currentTimeMillis()
         val usedNames = skillDao.getAll().map { it.name }.toMutableSet()
-        val entities = imported.mapIndexed { index, item ->
-            val name = uniqueName(item.name, usedNames)
-            usedNames.add(name)
-            Skill(
-                name = name,
+        val entities = items.mapIndexed { index, item ->
+            val referencesJson = Skill(
+                name = item.name,
                 description = item.description,
                 mainMarkdown = item.mainMarkdown,
-                references = item.references,
-                isBuiltIn = false,
-                enabled = true,
-                createdAt = now + index,
-                updatedAt = now + index
-            ).toEntity()
-        }
+                references = item.references
+            ).toEntity().referencesJson
+            val existing = if (overwrite) skillDao.getByName(item.name) else null
+            if (existing != null) {
+                skillDao.update(
+                    existing.copy(
+                        description = item.description,
+                        mainMarkdown = item.mainMarkdown,
+                        referencesJson = referencesJson,
+                        updatedAt = now + index
+                    )
+                )
+                null
+            } else {
+                val name = if (overwrite) item.name else uniqueName(item.name, usedNames)
+                usedNames.add(name)
+                Skill(
+                    name = name,
+                    description = item.description,
+                    mainMarkdown = item.mainMarkdown,
+                    references = item.references,
+                    isBuiltIn = false,
+                    enabled = true,
+                    createdAt = now + index,
+                    updatedAt = now + index
+                ).toEntity()
+            }
+        }.filterNotNull()
         if (entities.isNotEmpty()) skillDao.insertAll(entities)
-        entities.size
+        items.size
     }
 
     suspend fun exportSingle(output: OutputStream, skill: Skill) = withContext(Dispatchers.IO) {
@@ -157,23 +203,30 @@ class SkillRepository(
                 }
             val frontMatter = regexFrontMatter(main)
             Skill(
-                name = frontMatter.first ?: dir,
-                description = frontMatter.second.orEmpty(),
+                name = frontMatter.name ?: dir,
+                description = frontMatter.description.orEmpty(),
                 mainMarkdown = main,
                 references = references,
                 isBuiltIn = true,
                 enabled = true,
+                isPipeline = frontMatter.pipeline,
                 createdAt = now + index,
                 updatedAt = now + index
             ).toEntity()
         }
     }
 
-    private fun regexFrontMatter(markdown: String): Pair<String?, String?> {
-        val text = markdown.trimStart()
-        if (!text.startsWith("---")) return null to null
+    private data class FrontMatter(
+        val name: String?,
+        val description: String?,
+        val pipeline: Boolean
+    )
+
+    private fun regexFrontMatter(markdown: String): FrontMatter {
+        val text = markdown.removePrefix("\uFEFF").trimStart()
+        if (!text.startsWith("---")) return FrontMatter(null, null, false)
         val end = text.indexOf("\n---", startIndex = 3)
-        if (end < 0) return null to null
+        if (end < 0) return FrontMatter(null, null, false)
         val body = text.substring(3, end)
         val name = body.lineSequence()
             .firstOrNull { it.trimStart().startsWith("name:") }
@@ -181,6 +234,13 @@ class SkillRepository(
         val description = body.lineSequence()
             .firstOrNull { it.trimStart().startsWith("description:") }
             ?.substringAfter(":")?.trim()?.trim('"', '\'')
-        return name?.takeIf { it.isNotBlank() } to description?.takeIf { it.isNotBlank() }
+        val pipeline = body.lineSequence()
+            .firstOrNull { it.trimStart().startsWith("pipeline:") }
+            ?.substringAfter(":")?.trim()?.equals("true", ignoreCase = true) ?: false
+        return FrontMatter(
+            name = name?.takeIf { it.isNotBlank() },
+            description = description?.takeIf { it.isNotBlank() },
+            pipeline = pipeline
+        )
     }
 }

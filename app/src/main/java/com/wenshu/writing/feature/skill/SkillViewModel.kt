@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.wenshu.writing.data.repository.SkillArchive
 import com.wenshu.writing.data.repository.SkillRepository
 import com.wenshu.writing.domain.model.Skill
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,7 +22,9 @@ data class SkillUiState(
     val builtInExpanded: Boolean = true,
     val customExpanded: Boolean = true,
     val isBusy: Boolean = false,
-    val message: String? = null
+    val message: String? = null,
+    val conflictNames: List<String> = emptyList(),
+    val showConflictDialog: Boolean = false
 )
 
 class SkillViewModel(
@@ -37,6 +40,8 @@ class SkillViewModel(
 
     private val _uiState = MutableStateFlow(SkillUiState())
     val uiState: StateFlow<SkillUiState> = _uiState.asStateFlow()
+
+    private var pendingImport: List<SkillArchive.ImportedSkill> = emptyList()
 
     fun updateSearch(value: String) = _uiState.update { it.copy(search = value) }
 
@@ -78,24 +83,66 @@ class SkillViewModel(
         }
     }
 
+    /** 解析 → 检测重名 → 无冲突直接导入，有冲突弹窗让用户选择覆盖或取消。 */
     fun importZip(uri: Uri) {
         if (_uiState.value.isBusy) return
-        _uiState.update { it.copy(isBusy = true) }
+        _uiState.update { it.copy(isBusy = true, message = null) }
         viewModelScope.launch {
-            val result = runCatching {
-                context.contentResolver.openInputStream(uri)?.use { stream ->
-                    repository.importZip(stream)
-                } ?: throw IllegalArgumentException("无法读取所选文件")
-            }
-            _uiState.update {
-                it.copy(
-                    isBusy = false,
-                    message = result.fold(
-                        onSuccess = { count -> "已成功导入 $count 个技能" },
-                        onFailure = { error -> "导入失败：${error.message ?: "文件格式不正确"}" }
+            try {
+                val items = context.contentResolver.openInputStream(uri)
+                    ?.use { repository.parseImport(it) }
+                    ?: throw IllegalArgumentException("无法读取所选文件")
+                val conflicts = repository.findConflicts(items)
+                if (conflicts.isNotEmpty()) {
+                    pendingImport = items
+                    _uiState.update {
+                        it.copy(
+                            isBusy = false,
+                            conflictNames = conflicts,
+                            showConflictDialog = true
+                        )
+                    }
+                } else {
+                    repository.importSkills(items, overwrite = false)
+                    _uiState.update { it.copy(isBusy = false, message = "Skill导入成功") }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isBusy = false,
+                        message = e.message ?: "导入失败，请检查压缩包"
                     )
-                )
+                }
             }
+        }
+    }
+
+    fun confirmOverwriteImport() {
+        val items = pendingImport
+        pendingImport = emptyList()
+        _uiState.update { it.copy(showConflictDialog = false, isBusy = true) }
+        viewModelScope.launch {
+            try {
+                repository.importSkills(items, overwrite = true)
+                _uiState.update {
+                    it.copy(isBusy = false, message = "Skill导入成功", conflictNames = emptyList())
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isBusy = false,
+                        message = e.message ?: "导入失败，请检查压缩包",
+                        conflictNames = emptyList()
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelImport() {
+        pendingImport = emptyList()
+        _uiState.update {
+            it.copy(showConflictDialog = false, conflictNames = emptyList(), message = "已取消导入")
         }
     }
 

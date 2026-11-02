@@ -231,7 +231,7 @@ fun SettingsScreen(
                             )
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                text = "版本 1.0.3 · 本地优先的长篇小说写作工具",
+                                text = "版本 1.0.4 · 本地优先的长篇小说写作工具",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

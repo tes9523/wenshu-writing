@@ -27,6 +27,7 @@ import com.wenshu.writing.feature.editor.ChapterEditorScreen
 import com.wenshu.writing.feature.library.LibraryScreen
 import com.wenshu.writing.feature.memo.MemoEditorScreen
 import com.wenshu.writing.feature.memo.MemoScreen
+import com.wenshu.writing.feature.pipeline.PipelineScreen
 import com.wenshu.writing.feature.settings.SettingsScreen
 import com.wenshu.writing.feature.skill.SkillEditorScreen
 import com.wenshu.writing.feature.skill.SkillScreen
@@ -64,6 +65,11 @@ fun AppNavHost(container: AppContainer) {
                     container = container,
                     onOpenNovel = { novelId ->
                         navController.navigate(Routes.chapterList(novelId))
+                    },
+                    onOpenPipeline = { novelId, skillId ->
+                        navController.navigate(Routes.pipeline(novelId, skillId)) {
+                            launchSingleTop = true
+                        }
                     }
                 )
             }
@@ -75,6 +81,11 @@ fun AppNavHost(container: AppContainer) {
                     container = container,
                     onOpenProviders = {
                         navController.navigate(Routes.AI_PROVIDERS) {
+                            launchSingleTop = true
+                        }
+                    },
+                    onOpenPipeline = { novelId, skillId ->
+                        navController.navigate(Routes.pipeline(novelId, skillId)) {
                             launchSingleTop = true
                         }
                     }
@@ -158,6 +169,20 @@ fun AppNavHost(container: AppContainer) {
                 ChapterEditorScreen(
                     container = container,
                     chapterId = entry.arguments?.getLong("chapterId") ?: 0L,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable(
+                route = Routes.PIPELINE,
+                arguments = listOf(
+                    navArgument("novelId") { type = NavType.LongType },
+                    navArgument("skillId") { type = NavType.LongType }
+                )
+            ) { entry ->
+                PipelineScreen(
+                    container = container,
+                    novelId = entry.arguments?.getLong("novelId") ?: 0L,
+                    skillId = entry.arguments?.getLong("skillId") ?: 0L,
                     onBack = { navController.popBackStack() }
                 )
             }

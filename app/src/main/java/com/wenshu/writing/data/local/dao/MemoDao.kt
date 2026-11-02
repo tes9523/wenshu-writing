@@ -10,8 +10,17 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface MemoDao {
 
-    @Query("SELECT * FROM memo_notes ORDER BY updatedAt DESC, id DESC")
-    fun observeAll(): Flow<List<MemoNoteEntity>>
+    @Query(
+        "SELECT * FROM memo_notes WHERE (`bookId` = :bookId OR (`bookId` IS NULL AND :bookId IS NULL)) " +
+            "ORDER BY updatedAt DESC, id DESC"
+    )
+    fun observeAll(bookId: Long?): Flow<List<MemoNoteEntity>>
+
+    @Query(
+        "SELECT * FROM memo_notes WHERE (`bookId` = :bookId OR (`bookId` IS NULL AND :bookId IS NULL)) " +
+            "ORDER BY updatedAt DESC, id DESC"
+    )
+    suspend fun getByBook(bookId: Long?): List<MemoNoteEntity>
 
     @Query("SELECT * FROM memo_notes WHERE id = :id")
     fun observeById(id: Long): Flow<MemoNoteEntity?>
@@ -21,6 +30,9 @@ interface MemoDao {
 
     @Insert
     suspend fun insert(entity: MemoNoteEntity): Long
+
+    @Insert
+    suspend fun insertAll(entities: List<MemoNoteEntity>)
 
     @Update
     suspend fun update(entity: MemoNoteEntity)

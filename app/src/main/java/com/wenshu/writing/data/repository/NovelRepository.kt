@@ -26,6 +26,9 @@ class NovelRepository(
     fun observeChapter(chapterId: Long): Flow<Chapter?> =
         chapterDao.observeById(chapterId).map { it?.toModel() }
 
+    suspend fun getNovel(novelId: Long): Novel? =
+        novelDao.getById(novelId)?.toModel()
+
     suspend fun getChapter(chapterId: Long): Chapter? =
         chapterDao.getById(chapterId)?.toModel()
 

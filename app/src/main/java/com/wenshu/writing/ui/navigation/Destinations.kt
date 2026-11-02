@@ -22,11 +22,13 @@ object Routes {
 
     const val CHAPTER_LIST = "novel/{novelId}/chapters"
     const val CHAPTER_EDITOR = "chapter/{chapterId}"
+    const val PIPELINE = "pipeline/{novelId}/{skillId}"
 
     fun chapterList(novelId: Long) = "novel/$novelId/chapters"
     fun chapterEditor(chapterId: Long) = "chapter/$chapterId"
     fun skillEditor(skillId: Long) = "skill_editor/$skillId"
     fun memoEditor(noteId: Long) = "memo_note/$noteId"
+    fun pipeline(novelId: Long, skillId: Long) = "pipeline/$novelId/$skillId"
 }
 
 data class TopLevelDestination(

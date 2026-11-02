@@ -1,5 +1,6 @@
 package com.wenshu.writing.feature.skill
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -18,7 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -33,6 +34,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -65,6 +67,17 @@ fun SkillEditorScreen(
         snackbarHostState.showSnackbar(message)
     }
 
+    LaunchedEffect(state.closeRequested) {
+        if (state.closeRequested) {
+            viewModel.consumeCloseRequest()
+            onBack()
+        }
+    }
+
+    BackHandler {
+        if (!viewModel.uiState.value.isEditing) onBack() else viewModel.requestExit()
+    }
+
     Scaffold(
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         topBar = {
@@ -73,15 +86,42 @@ fun SkillEditorScreen(
                     Text(
                         text = when {
                             state.isNew -> "新建 Skill"
-                            state.isBuiltIn -> "编辑内置 Skill"
-                            else -> "编辑 Skill"
+                            state.isEditing -> "编辑 Skill"
+                            else -> "Skill 详情"
                         },
                         style = MaterialTheme.typography.titleLarge
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = viewModel::requestExit) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    if (state.loaded) {
+                        if (state.isEditing) {
+                            TextButton(
+                                onClick = {
+                                    if (state.isNew) viewModel.discardAndExit()
+                                    else viewModel.cancelEditing()
+                                }
+                            ) { Text("取消") }
+                            TextButton(
+                                onClick = viewModel::requestSave,
+                                enabled = state.canSave
+                            ) {
+                                Text(
+                                    text = if (state.isSaving) "保存中…" else "保存",
+                                    color = if (state.canSave) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                    }
+                                )
+                            }
+                        } else {
+                            TextButton(onClick = viewModel::startEditing) { Text("编辑") }
+                        }
                     }
                 }
             )
@@ -114,6 +154,23 @@ fun SkillEditorScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            if (state.isBuiltIn) {
+                item(key = "builtin-hint") {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    ) {
+                        Text(
+                            text = "内置Skill不支持修改，可导出后新建自定义Skill修改。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(14.dp)
+                        )
+                    }
+                }
+            }
+
             item(key = "basic") {
                 Card(
                     colors = CardDefaults.cardColors(
@@ -126,7 +183,7 @@ fun SkillEditorScreen(
                             value = state.name,
                             onValueChange = viewModel::updateName,
                             label = { Text("技能名称") },
-                            placeholder = { Text("如：章节润色") },
+                            readOnly = !state.isEditing,
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -135,7 +192,7 @@ fun SkillEditorScreen(
                             value = state.description,
                             onValueChange = viewModel::updateDescription,
                             label = { Text("简介") },
-                            placeholder = { Text("一句话说明该技能的作用，会展示在列表中") },
+                            readOnly = !state.isEditing,
                             minLines = 2,
                             maxLines = 4,
                             modifier = Modifier.fillMaxWidth()
@@ -166,8 +223,9 @@ fun SkillEditorScreen(
                         OutlinedTextField(
                             value = state.mainMarkdown,
                             onValueChange = viewModel::updateMainMarkdown,
+                            readOnly = !state.isEditing,
                             minLines = 10,
-                            maxLines = 24,
+                            maxLines = 30,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -176,19 +234,29 @@ fun SkillEditorScreen(
 
             item(key = "references-header") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "参考素材（references）",
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedButton(onClick = viewModel::addReference) {
-                        Icon(
-                            Icons.Outlined.Add,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "参考素材（references）",
+                            style = MaterialTheme.typography.titleSmall
                         )
-                        Spacer(Modifier.width(6.dp))
-                        Text("添加")
+                        Text(
+                            text = "共 ${state.references.size} 个文件",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    if (state.isEditing) {
+                        OutlinedButton(onClick = viewModel::addReference) {
+                            Icon(
+                                Icons.Outlined.Add,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text("添加")
+                        }
                     }
                 }
             }
@@ -223,16 +291,18 @@ fun SkillEditorScreen(
                                     value = reference.name,
                                     onValueChange = { viewModel.updateReferenceName(index, it) },
                                     label = { Text("文件名") },
-                                    placeholder = { Text("notes.md") },
+                                    readOnly = !state.isEditing,
                                     singleLine = true,
                                     modifier = Modifier.weight(1f)
                                 )
-                                IconButton(onClick = { viewModel.removeReference(index) }) {
-                                    Icon(
-                                        Icons.Outlined.Close,
-                                        contentDescription = "移除素材",
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                if (state.isEditing) {
+                                    IconButton(onClick = { viewModel.removeReference(index) }) {
+                                        Icon(
+                                            Icons.Outlined.Close,
+                                            contentDescription = "移除素材",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                             Spacer(Modifier.height(8.dp))
@@ -240,6 +310,7 @@ fun SkillEditorScreen(
                                 value = reference.content,
                                 onValueChange = { viewModel.updateReferenceContent(index, it) },
                                 label = { Text("内容") },
+                                readOnly = !state.isEditing,
                                 minLines = 4,
                                 maxLines = 14,
                                 modifier = Modifier.fillMaxWidth()
@@ -249,39 +320,15 @@ fun SkillEditorScreen(
                 }
             }
 
-            item(key = "actions") {
+            item(key = "footer") {
                 Column {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Spacer(Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(
-                            onClick = { viewModel.save(onSaved = onBack) },
-                            enabled = !state.isSaving,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            if (state.isSaving) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.onPrimary
-                                )
-                            } else {
-                                Text("保存")
-                            }
-                        }
-                        OutlinedButton(
-                            onClick = onBack,
-                            enabled = !state.isSaving
-                        ) {
-                            Text("取消")
-                        }
-                    }
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = if (state.isBuiltIn) {
-                            "内置技能可编辑内容与开关，但不允许删除。"
+                        text = if (state.isEditing) {
+                            "编辑完成后点击右上角「保存」，会再次确认后写入本机。"
                         } else {
-                            "自定义技能会保存到本机数据库，可随时编辑或删除。"
+                            "当前为只读模式，点击右上角「编辑」后才能修改内容。"
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -290,5 +337,37 @@ fun SkillEditorScreen(
                 }
             }
         }
+    }
+
+    if (state.showSaveConfirm) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissSaveConfirm,
+            title = { Text("确认保存") },
+            text = { Text("是否确认保存对该Skill的修改？") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmSave(onCreated = onBack) }) {
+                    Text("确认")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissSaveConfirm) { Text("取消") }
+            }
+        )
+    }
+
+    if (state.showExitConfirm) {
+        AlertDialog(
+            onDismissRequest = viewModel::stayOnPage,
+            title = { Text("未保存的修改") },
+            text = { Text("当前存在未保存的修改，是否放弃？") },
+            confirmButton = {
+                TextButton(onClick = viewModel::discardAndExit) {
+                    Text("放弃修改", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::stayOnPage) { Text("留在页面") }
+            }
+        )
     }
 }

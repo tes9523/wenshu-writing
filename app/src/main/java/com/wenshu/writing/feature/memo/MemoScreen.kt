@@ -19,11 +19,16 @@ import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -40,6 +45,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wenshu.writing.di.AppContainer
 import com.wenshu.writing.domain.model.MemoNote
+import com.wenshu.writing.domain.model.Novel
 import com.wenshu.writing.ui.components.ConfirmDeleteDialog
 import com.wenshu.writing.ui.components.EmptyState
 import com.wenshu.writing.ui.util.formatShortTimestamp
@@ -51,15 +57,27 @@ fun MemoScreen(
     onOpenNote: (Long) -> Unit
 ) {
     val viewModel: MemoViewModel = viewModel(
-        factory = MemoViewModel.factory(container.memoRepository)
+        factory = MemoViewModel.factory(
+            repository = container.memoRepository,
+            preferencesRepository = container.preferencesRepository,
+            novelRepository = container.novelRepository
+        )
     )
-    val notes by viewModel.notes.collectAsStateWithLifecycle()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val notes = state.notes
     var noteToDelete by remember { mutableStateOf<MemoNote?>(null) }
 
     Scaffold(
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         topBar = {
-            TopAppBar(title = { Text("备忘录", style = MaterialTheme.typography.titleLarge) })
+            Column {
+                TopAppBar(title = { Text("备忘录", style = MaterialTheme.typography.titleLarge) })
+                BookSelectorBar(
+                    novels = state.novels,
+                    activeBookId = state.activeBookId,
+                    onSelect = viewModel::selectBook
+                )
+            }
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
@@ -120,6 +138,63 @@ fun MemoScreen(
             },
             onDismiss = { noteToDelete = null }
         )
+    }
+}
+
+/** 书稿隔离选择器：只展示当前书稿的备忘录。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BookSelectorBar(
+    novels: List<Novel>,
+    activeBookId: Long?,
+    onSelect: (Long?) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = if (activeBookId == null) {
+        "全局公共备忘录"
+    } else {
+        novels.firstOrNull { it.id == activeBookId }?.title ?: "全局公共备忘录"
+    }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+    ) {
+        OutlinedTextField(
+            value = label,
+            onValueChange = {},
+            readOnly = true,
+            singleLine = true,
+            label = { Text("当前书稿") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text("全局公共备忘录") },
+                onClick = {
+                    onSelect(null)
+                    expanded = false
+                }
+            )
+            novels.forEach { novel ->
+                DropdownMenuItem(
+                    text = { Text(novel.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    onClick = {
+                        onSelect(novel.id)
+                        expanded = false
+                    }
+                )
+            }
+        }
     }
 }
 

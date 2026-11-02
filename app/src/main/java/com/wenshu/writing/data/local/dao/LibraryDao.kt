@@ -11,8 +11,17 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface LibraryDao {
 
-    @Query("SELECT * FROM characters ORDER BY updatedAt DESC")
-    fun observeCharacters(): Flow<List<CharacterEntity>>
+    @Query(
+        "SELECT * FROM characters WHERE (`bookId` = :bookId OR (`bookId` IS NULL AND :bookId IS NULL)) " +
+            "ORDER BY updatedAt DESC"
+    )
+    fun observeCharacters(bookId: Long?): Flow<List<CharacterEntity>>
+
+    @Query(
+        "SELECT * FROM characters WHERE (`bookId` = :bookId OR (`bookId` IS NULL AND :bookId IS NULL)) " +
+            "ORDER BY updatedAt DESC"
+    )
+    suspend fun getCharacters(bookId: Long?): List<CharacterEntity>
 
     @Insert
     suspend fun insertCharacter(entity: CharacterEntity): Long
@@ -26,8 +35,17 @@ interface LibraryDao {
     @Query("SELECT * FROM characters WHERE id = :id")
     suspend fun getCharacter(id: Long): CharacterEntity?
 
-    @Query("SELECT * FROM world_settings ORDER BY updatedAt DESC")
-    fun observeWorldSettings(): Flow<List<WorldSettingEntity>>
+    @Query(
+        "SELECT * FROM world_settings WHERE (`bookId` = :bookId OR (`bookId` IS NULL AND :bookId IS NULL)) " +
+            "ORDER BY updatedAt DESC"
+    )
+    fun observeWorldSettings(bookId: Long?): Flow<List<WorldSettingEntity>>
+
+    @Query(
+        "SELECT * FROM world_settings WHERE (`bookId` = :bookId OR (`bookId` IS NULL AND :bookId IS NULL)) " +
+            "ORDER BY updatedAt DESC"
+    )
+    suspend fun getWorldSettings(bookId: Long?): List<WorldSettingEntity>
 
     @Insert
     suspend fun insertWorldSetting(entity: WorldSettingEntity): Long

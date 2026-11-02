@@ -20,7 +20,8 @@ class PreferencesRepository(
             themeMode = runCatching {
                 ThemeMode.valueOf(entity?.themeMode ?: ThemeMode.SYSTEM.name)
             }.getOrDefault(ThemeMode.SYSTEM),
-            activeAiProfileId = entity?.activeAiProfileId ?: -1L
+            activeAiProfileId = entity?.activeAiProfileId ?: -1L,
+            activeNovelId = entity?.activeNovelId ?: -1L
         )
     }
 
@@ -37,7 +38,20 @@ class PreferencesRepository(
         settingsDao.saveAppSettings(
             AppSettingsEntity(
                 themeMode = mode.name,
-                activeAiProfileId = current?.activeAiProfileId ?: -1L
+                activeAiProfileId = current?.activeAiProfileId ?: -1L,
+                activeNovelId = current?.activeNovelId ?: -1L
+            )
+        )
+    }
+
+    /** 切换当前激活书稿；-1 表示回落到全局公共素材。 */
+    suspend fun setActiveNovel(novelId: Long) {
+        val current = settingsDao.getAppSettings()
+        settingsDao.saveAppSettings(
+            AppSettingsEntity(
+                themeMode = current?.themeMode ?: ThemeMode.SYSTEM.name,
+                activeAiProfileId = current?.activeAiProfileId ?: -1L,
+                activeNovelId = novelId
             )
         )
     }
@@ -62,7 +76,8 @@ class PreferencesRepository(
         settingsDao.saveAppSettings(
             AppSettingsEntity(
                 themeMode = current?.themeMode ?: ThemeMode.SYSTEM.name,
-                activeAiProfileId = profileId
+                activeAiProfileId = profileId,
+                activeNovelId = current?.activeNovelId ?: -1L
             )
         )
     }

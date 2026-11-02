@@ -2,16 +2,28 @@ package com.wenshu.writing.data.repository
 
 import com.wenshu.writing.domain.model.Skill
 import com.wenshu.writing.domain.model.SkillReference
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.zip.ZipEntry
+import java.util.zip.ZipException
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
+/** 导入失败时会携带面向用户的提示文案。 */
+class SkillImportException(message: String) : IllegalArgumentException(message)
+
 /**
- * Skill zip 包的读写规则。
- * 单技能包：根目录 main.md + references/。
- * 批量合集包：每个技能一个子目录，子目录内同样是 main.md + references/。
+ * Skill zip 包的读写规则（1.0.4 定稿）。
+ *
+ * 读取兼容：技能根目录的 `main.md` / `main` / `skill.md`，配套 `meta.json`（必须含 name / desc）
+ * 与 `references/` 目录。根目录存在主体文件视为单技能包；否则每个一级子目录视为一个技能。
+ * 仅读取技能根目录的主体文件，不递归嵌套包。
+ *
+ * 写出统一：`main` + `meta.json` + `references/`。
  */
 object SkillArchive {
 
@@ -22,60 +34,95 @@ object SkillArchive {
         val references: List<SkillReference>
     )
 
+    private val MAIN_FILE_NAMES = listOf("main.md", "main", "skill.md")
+    /** 项目导出固定主体文件名（1.0.3 起的全局规范）。 */
+    private const val MAIN_FILE_NAME = "main"
+    private const val META_FILE_NAME = "meta.json"
+    private val json = Json { ignoreUnknownKeys = true }
+
     fun readZip(input: InputStream): List<ImportedSkill> {
         val entries = LinkedHashMap<String, ByteArray>()
-        ZipInputStream(input).use { zip ->
-            var entry = zip.nextEntry
-            while (entry != null) {
-                val path = entry.name.replace('\\', '/').trimStart('/')
-                val isHidden = path.startsWith("__MACOSX/") ||
-                    path.substringAfterLast('/').startsWith(".")
-                if (!entry.isDirectory && !isHidden) {
-                    entries[path] = zip.readBytes()
+        try {
+            ZipInputStream(input).use { zip ->
+                var entry = zip.nextEntry
+                while (entry != null) {
+                    val rawPath = entry.name.replace('\\', '/')
+                    if (!entry.isDirectory) {
+                        validatePath(rawPath)
+                        val path = rawPath.trimStart('/')
+                        val isHidden = path.startsWith("__MACOSX/") ||
+                            path.substringAfterLast('/').startsWith(".")
+                        if (!isHidden) {
+                            entries[path] = zip.readBytes()
+                        }
+                    }
+                    zip.closeEntry()
+                    entry = zip.nextEntry
                 }
-                zip.closeEntry()
-                entry = zip.nextEntry
             }
+        } catch (e: SkillImportException) {
+            throw e
+        } catch (e: ZipException) {
+            val message = e.message.orEmpty()
+            throw SkillImportException(
+                if (message.contains("encrypt", ignoreCase = true)) {
+                    "不支持加密压缩包，请解压后重新打包"
+                } else {
+                    "压缩包损坏，不是合法ZIP"
+                }
+            )
+        } catch (e: Exception) {
+            throw SkillImportException(e.message?.takeIf { it.contains("encrypt", true) }
+                ?: "压缩包损坏，不是合法ZIP")
         }
 
-        val mainPaths = entries.keys.filter {
-            it.substringAfterLast('/').equals("main.md", ignoreCase = true)
-        }
-        if (mainPaths.isEmpty()) {
-            throw IllegalArgumentException("压缩包中未找到 main.md，请检查 Skill 包结构")
+        val mainByDir = entries.keys
+            .filter { path -> MAIN_FILE_NAMES.any { it.equals(path.substringAfterLast('/'), true) } }
+            .groupBy { path -> path.substringBeforeLast('/', "") }
+
+        if (mainByDir.isEmpty()) {
+            throw SkillImportException("未识别到Skill主体文件（main / skill.md）")
         }
 
-        // 根目录存在 main.md 时视为单技能包，避免把嵌套目录重复识别为多个技能。
-        val rootMain = mainPaths.firstOrNull { it == "main.md" }
-        val targets = if (rootMain != null) listOf(rootMain) else mainPaths
+        // 根目录主体文件优先，视为单技能包；否则只取一级子目录，避免嵌套包错乱。
+        val roots = if (mainByDir.containsKey("")) {
+            listOf("")
+        } else {
+            mainByDir.keys.filter { it.isNotBlank() && !it.contains('/') }.sorted()
+        }
+        if (roots.isEmpty()) {
+            throw SkillImportException("未识别到Skill主体文件（main / skill.md）")
+        }
 
-        return targets.map { mainPath ->
-            val root = mainPath.substringBeforeLast('/', "")
-            val folderName = root.trimEnd('/').substringAfterLast('/')
-            val main = entries[mainPath]?.toString(Charsets.UTF_8).orEmpty()
-            val frontMatter = parseFrontMatter(main)
+        return roots.map { root ->
+            val mainPath = pickMainPath(mainByDir[root].orEmpty())
+                ?: throw SkillImportException("未识别到Skill主体文件（main / skill.md）")
+            val main = readText(entries.getValue(mainPath))
+            val meta = parseMeta(entries, root)
+            val folderName = root.substringAfterLast('/')
             val references = entries.asSequence()
                 .filter { (path, _) ->
-                    if (root.isEmpty()) true else path.startsWith("$root/")
+                    if (root.isEmpty()) {
+                        path.startsWith("references/", ignoreCase = true)
+                    } else {
+                        path.startsWith("$root/references/", ignoreCase = true)
+                    }
                 }
                 .filter { (path, _) ->
-                    val relative = if (root.isEmpty()) path else path.removePrefix("$root/")
-                    relative.startsWith("references/") &&
-                        (relative.endsWith(".md", ignoreCase = true) ||
-                            relative.endsWith(".txt", ignoreCase = true))
+                    path.endsWith(".md", true) || path.endsWith(".txt", true)
                 }
                 .map { (path, bytes) ->
                     SkillReference(
                         name = path.substringAfterLast('/'),
-                        content = bytes.toString(Charsets.UTF_8)
+                        content = readText(bytes)
                     )
                 }
                 .sortedBy { it.name }
                 .toList()
 
             ImportedSkill(
-                name = folderName.ifBlank { frontMatter.first.orEmpty() }.ifBlank { "导入技能" },
-                description = frontMatter.second.orEmpty(),
+                name = meta.first,
+                description = meta.second,
                 mainMarkdown = main,
                 references = references
             )
@@ -84,7 +131,8 @@ object SkillArchive {
 
     fun writeSingle(output: OutputStream, skill: Skill) {
         ZipOutputStream(output).use { zip ->
-            zip.putText("main.md", skill.mainMarkdown)
+            zip.putText(MAIN_FILE_NAME, skill.mainMarkdown)
+            zip.putText(META_FILE_NAME, metaJson(skill))
             skill.references.forEach { reference ->
                 zip.putText("references/${safeFileName(reference.name)}", reference.content)
             }
@@ -96,7 +144,8 @@ object SkillArchive {
             val usedFolders = mutableSetOf<String>()
             skills.forEach { skill ->
                 val folder = uniqueFolderName(skill.name, usedFolders)
-                zip.putText("$folder/main.md", skill.mainMarkdown)
+                zip.putText("$folder/$MAIN_FILE_NAME", skill.mainMarkdown)
+                zip.putText("$folder/$META_FILE_NAME", metaJson(skill))
                 skill.references.forEach { reference ->
                     zip.putText(
                         "$folder/references/${safeFileName(reference.name)}",
@@ -107,20 +156,77 @@ object SkillArchive {
         }
     }
 
-    /** 解析 main.md 顶部 YAML frontmatter 中的 name / description。 */
-    private fun parseFrontMatter(markdown: String): Pair<String?, String?> {
-        val text = markdown.trimStart()
-        if (!text.startsWith("---")) return null to null
-        val end = text.indexOf("\n---", startIndex = 3)
-        if (end < 0) return null to null
-        val body = text.substring(3, end)
-        val name = body.lineSequence()
-            .firstOrNull { it.trimStart().startsWith("name:") }
-            ?.substringAfter(":")?.trim()?.trim('"', '\'')
-        val description = body.lineSequence()
-            .firstOrNull { it.trimStart().startsWith("description:") }
-            ?.substringAfter(":")?.trim()?.trim('"', '\'')
-        return name?.takeIf { it.isNotBlank() } to description?.takeIf { it.isNotBlank() }
+    private fun pickMainPath(paths: List<String>): String? {
+        MAIN_FILE_NAMES.forEach { expected ->
+            paths.firstOrNull { it.substringAfterLast('/').equals(expected, true) }
+                ?.let { return it }
+        }
+        return paths.firstOrNull()
+    }
+
+    /** meta.json 必须存在且同时包含 name 与 desc 字段。 */
+    private fun parseMeta(entries: Map<String, ByteArray>, root: String): Pair<String, String> {
+        val metaPath = entries.keys.firstOrNull { path ->
+            val expected = if (root.isEmpty()) META_FILE_NAME else "$root/$META_FILE_NAME"
+            path.equals(expected, ignoreCase = true)
+        } ?: throw SkillImportException("meta.json缺失或格式错误")
+
+        val raw = readText(entries.getValue(metaPath))
+        val obj: JsonObject = try {
+            json.parseToJsonElement(raw).jsonObject
+        } catch (e: Exception) {
+            throw SkillImportException("meta.json缺失或格式错误")
+        }
+        val name = obj.stringField("name")
+        val desc = obj.stringField("desc") ?: obj.stringField("description")
+        if (name.isNullOrBlank() || desc == null) {
+            throw SkillImportException("meta.json缺失或格式错误")
+        }
+        return name.trim() to desc.trim()
+    }
+
+    private fun JsonObject.stringField(key: String): String? {
+        val value = this[key] as? JsonPrimitive ?: return null
+        return value.content
+    }
+
+    private fun validatePath(path: String) {
+        val normalized = path.replace('\\', '/')
+        val segments = normalized.split('/')
+        if (normalized.startsWith("/") || segments.any { it == ".." }) {
+            throw SkillImportException("压缩包包含非法路径，已拒绝导入")
+        }
+        if (normalized.contains(':')) {
+            throw SkillImportException("压缩包包含非法路径，已拒绝导入")
+        }
+    }
+
+    /** 统一按 UTF-8 解码并剔除 BOM 头，避免 Windows 编辑器产生的乱码。 */
+    private fun readText(bytes: ByteArray): String {
+        val text = bytes.toString(Charsets.UTF_8)
+        return text.removePrefix("\uFEFF").removePrefix("\uFEFF")
+    }
+
+    private fun metaJson(skill: Skill): String = buildString {
+        append("{\n")
+        append("  \"name\": ").append(quote(skill.name)).append(",\n")
+        append("  \"desc\": ").append(quote(skill.description)).append("\n")
+        append("}\n")
+    }
+
+    private fun quote(value: String): String = buildString {
+        append('"')
+        value.forEach { ch ->
+            when (ch) {
+                '"' -> append("\\\"")
+                '\\' -> append("\\\\")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> append(ch)
+            }
+        }
+        append('"')
     }
 
     private fun safeFileName(name: String): String {
