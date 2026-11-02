@@ -18,6 +18,9 @@ interface NovelDao {
     @Query("SELECT * FROM novels WHERE id = :id")
     suspend fun getById(id: Long): NovelEntity?
 
+    @Query("SELECT * FROM novels WHERE title = :title LIMIT 1")
+    suspend fun getByTitle(title: String): NovelEntity?
+
     @Insert
     suspend fun insert(entity: NovelEntity): Long
 

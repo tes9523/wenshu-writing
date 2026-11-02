@@ -31,6 +31,9 @@ interface ChatDao {
     @Query("UPDATE chat_sessions SET updatedAt = :updatedAt WHERE id = :id")
     suspend fun touchSession(id: Long, updatedAt: Long)
 
+    @Query("UPDATE chat_sessions SET bookId = :bookId, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun bindSessionBook(id: Long, bookId: Long?, updatedAt: Long)
+
     @Query("DELETE FROM chat_sessions WHERE id = :id")
     suspend fun deleteSession(id: Long)
 
@@ -42,6 +45,9 @@ interface ChatDao {
 
     @Insert
     suspend fun insertMessage(entity: ChatMessageEntity): Long
+
+    @Query("DELETE FROM chat_messages WHERE id = :id")
+    suspend fun deleteMessage(id: Long)
 
     @Query("DELETE FROM chat_messages WHERE sessionId = :sessionId")
     suspend fun deleteMessages(sessionId: Long)

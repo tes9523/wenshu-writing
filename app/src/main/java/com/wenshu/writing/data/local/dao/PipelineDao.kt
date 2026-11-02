@@ -21,6 +21,9 @@ interface PipelineDao {
     @Insert
     suspend fun insertOutlines(entities: List<OutlineEntity>)
 
+    @Insert
+    suspend fun insertOutline(entity: OutlineEntity): Long
+
     @Query("DELETE FROM outlines WHERE novelId = :novelId")
     suspend fun deleteOutlines(novelId: Long)
 

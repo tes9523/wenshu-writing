@@ -8,6 +8,9 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import java.io.InputStream
 import java.io.OutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipException
 import java.util.zip.ZipInputStream
@@ -19,9 +22,9 @@ class SkillImportException(message: String) : IllegalArgumentException(message)
 /**
  * Skill zip 包的读写规则（1.0.4 定稿）。
  *
- * 读取兼容：技能根目录的 `main.md` / `main` / `skill.md`，配套 `meta.json`（必须含 name / desc）
- * 与 `references/` 目录。根目录存在主体文件视为单技能包；否则每个一级子目录视为一个技能。
- * 仅读取技能根目录的主体文件，不递归嵌套包。
+ * 读取兼容：技能根目录的 `main.md` / `main` / `skill.md` 为主体文件，`meta.json` 为可选项。
+ * 缺少 meta.json 时自动使用「导入Skill_时间戳」作为名称、简介留空。根目录存在主体文件视为单技能包；
+ * 否则每个一级子目录视为一个技能。仅读取技能根目录的主体文件，不递归嵌套包。
  *
  * 写出统一：`main` + `meta.json` + `references/`。
  */
@@ -94,11 +97,11 @@ object SkillArchive {
             throw SkillImportException("未识别到Skill主体文件（main / skill.md）")
         }
 
-        return roots.map { root ->
+        return roots.mapIndexed { index, root ->
             val mainPath = pickMainPath(mainByDir[root].orEmpty())
                 ?: throw SkillImportException("未识别到Skill主体文件（main / skill.md）")
             val main = readText(entries.getValue(mainPath))
-            val meta = parseMeta(entries, root)
+            val meta = parseMeta(entries, root, index)
             val folderName = root.substringAfterLast('/')
             val references = entries.asSequence()
                 .filter { (path, _) ->
@@ -164,25 +167,38 @@ object SkillArchive {
         return paths.firstOrNull()
     }
 
-    /** meta.json 必须存在且同时包含 name 与 desc 字段。 */
-    private fun parseMeta(entries: Map<String, ByteArray>, root: String): Pair<String, String> {
+    /**
+     * meta.json 为可选：存在且格式正确时读取 name / desc；
+     * 缺失或无法解析时回落到「导入Skill_时间戳」，简介留空，允许用户在详情页修改。
+     */
+    private fun parseMeta(
+        entries: Map<String, ByteArray>,
+        root: String,
+        index: Int
+    ): Pair<String, String> {
         val metaPath = entries.keys.firstOrNull { path ->
             val expected = if (root.isEmpty()) META_FILE_NAME else "$root/$META_FILE_NAME"
             path.equals(expected, ignoreCase = true)
-        } ?: throw SkillImportException("meta.json缺失或格式错误")
+        } ?: return defaultSkillName(index) to ""
 
         val raw = readText(entries.getValue(metaPath))
         val obj: JsonObject = try {
             json.parseToJsonElement(raw).jsonObject
         } catch (e: Exception) {
-            throw SkillImportException("meta.json缺失或格式错误")
+            return defaultSkillName(index) to ""
         }
-        val name = obj.stringField("name")
-        val desc = obj.stringField("desc") ?: obj.stringField("description")
-        if (name.isNullOrBlank() || desc == null) {
-            throw SkillImportException("meta.json缺失或格式错误")
-        }
-        return name.trim() to desc.trim()
+        val name = obj.stringField("name")?.trim()?.takeIf { it.isNotBlank() }
+            ?: defaultSkillName(index)
+        val desc = (obj.stringField("desc") ?: obj.stringField("description"))
+            ?.trim()
+            .orEmpty()
+        return name to desc
+    }
+
+    private fun defaultSkillName(index: Int): String {
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+            .format(Date(System.currentTimeMillis() + index))
+        return "导入Skill_$stamp"
     }
 
     private fun JsonObject.stringField(key: String): String? {

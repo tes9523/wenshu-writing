@@ -29,6 +29,9 @@ class NovelRepository(
     suspend fun getNovel(novelId: Long): Novel? =
         novelDao.getById(novelId)?.toModel()
 
+    suspend fun findNovelByTitle(title: String): Novel? =
+        novelDao.getByTitle(title.trim())?.toModel()
+
     suspend fun getChapter(chapterId: Long): Chapter? =
         chapterDao.getById(chapterId)?.toModel()
 

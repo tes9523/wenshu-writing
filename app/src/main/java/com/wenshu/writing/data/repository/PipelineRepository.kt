@@ -50,6 +50,26 @@ class PipelineRepository(
         )
     }
 
+    /** 追加一条大纲，保留本书原有大纲内容。 */
+    suspend fun appendOutline(
+        novelId: Long,
+        title: String,
+        content: String,
+        kind: String = "outline"
+    ) = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        pipelineDao.insertOutline(
+            OutlineEntity(
+                novelId = novelId,
+                title = title,
+                content = content,
+                kind = kind,
+                createdAt = now,
+                updatedAt = now
+            )
+        )
+    }
+
     suspend fun replaceTasks(novelId: Long, tasks: List<ChapterTask>) = withContext(Dispatchers.IO) {
         pipelineDao.deleteTasks(novelId)
         if (tasks.isEmpty()) return@withContext

@@ -43,6 +43,11 @@ class ChatRepository(
         chatDao.renameSession(sessionId, title, System.currentTimeMillis())
     }
 
+    /** 大纲建档后把当前会话绑定到新建书稿，后续保存默认归属该书稿。 */
+    suspend fun bindSessionBook(sessionId: Long, bookId: Long?) = withContext(Dispatchers.IO) {
+        chatDao.bindSessionBook(sessionId, bookId, System.currentTimeMillis())
+    }
+
     suspend fun appendMessage(
         sessionId: Long,
         role: ChatRole,
@@ -70,6 +75,11 @@ class ChatRepository(
     suspend fun deleteSession(sessionId: Long) = withContext(Dispatchers.IO) {
         chatDao.deleteMessages(sessionId)
         chatDao.deleteSession(sessionId)
+    }
+
+    /** 仅删除会话内单条消息，不影响书稿、设定等数据。 */
+    suspend fun deleteMessage(messageId: Long) = withContext(Dispatchers.IO) {
+        chatDao.deleteMessage(messageId)
     }
 
     suspend fun clearMessages(sessionId: Long) = withContext(Dispatchers.IO) {

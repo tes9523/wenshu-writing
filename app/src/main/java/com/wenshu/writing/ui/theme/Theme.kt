@@ -4,12 +4,15 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import com.wenshu.writing.domain.model.ThemeMode
 
@@ -56,6 +59,15 @@ private val DarkColors = darkColorScheme(
     outlineVariant = DarkOutline.copy(alpha = 0.6f)
 )
 
+/** 统一圆角规范：卡片、输入框、对话框与抽屉保持一致的书卷气质。 */
+private val WenShuShapes = Shapes(
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(22.dp),
+    extraLarge = RoundedCornerShape(28.dp)
+)
+
 @Composable
 fun WenShuTheme(
     themeMode: ThemeMode,
@@ -81,6 +93,7 @@ fun WenShuTheme(
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColors else LightColors,
         typography = WenShuTypography,
+        shapes = WenShuShapes,
         content = content
     )
 }
