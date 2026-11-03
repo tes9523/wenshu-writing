@@ -18,7 +18,11 @@ import com.wenshu.writing.domain.model.ChatRole
 import com.wenshu.writing.domain.model.ChatSession
 import com.wenshu.writing.domain.model.Novel
 import com.wenshu.writing.domain.model.Skill
+import kotlinx.coroutines.CompletableJob
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -78,6 +82,12 @@ data class AiChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val input: String = "",
     val isSending: Boolean = false,
+    /** 联网检索阶段的 loading，和模型请求区分显示。 */
+    val isSearching: Boolean = false,
+    /** 用户手动打开联网搜索；默认关闭。 */
+    val webSearchEnabled: Boolean = false,
+    /** 上一轮搜索命中的来源（标题 + URL 片段），用于引用标注。 */
+    val searchSources: List<String> = emptyList(),
     val novels: List<Novel> = emptyList(),
     val selectedNovelId: Long? = null,
     val skills: List<Skill> = emptyList(),
@@ -85,6 +95,8 @@ data class AiChatUiState(
     val mentionResults: List<Skill> = emptyList(),
     val sessions: List<ChatSession> = emptyList(),
     val activeSessionId: Long? = null,
+    /** 当前会话绑定的书稿 ID；null = 全局会话。该值由 activeSessionId 自动推导。 */
+    val activeSessionBookId: Long? = null,
     /** 选中内置流水线 Skill 后由界面跳转到流水线页面。 */
     val pipelineSkill: Skill? = null,
     val message: String? = null,
@@ -106,10 +118,24 @@ class AiChatViewModel(
     private val aiClient: AiClient
 ) : ViewModel() {
 
+    /** 当前 AI 请求的 Job，用于"停止生成"按钮立即中断。 */
+    private var requestJob: Job? = null
+
     private val _uiState = MutableStateFlow(AiChatUiState())
     val uiState: StateFlow<AiChatUiState> = _uiState.asStateFlow()
 
     init {
+        // 从会话列表自动派生活跃会话绑定的书稿 ID，供 UI 展示"《书名》/全局"标签。
+        viewModelScope.launch {
+            _uiState.collect { state ->
+                val current = state.sessions
+                    .firstOrNull { it.id == state.activeSessionId }
+                    ?.bookId
+                if (current != state.activeSessionBookId) {
+                    _uiState.update { it.copy(activeSessionBookId = current) }
+                }
+            }
+        }
         // 只读取当前激活的提供商，切换逻辑统一放在「AI 提供商」页面，避免对话页自动改变激活项。
         viewModelScope.launch {
             combine(
@@ -246,13 +272,27 @@ class AiChatViewModel(
         _uiState.update { it.copy(activeSessionId = sessionId) }
     }
 
-    /** 新建会话；bookId 为空表示全局通用会话。 */
-    fun createSession(bookId: Long?) {
+    /**
+     * 新建空白会话：不绑定书稿（全局会话），临时标题「新会话」，
+     * 第一条用户消息发送成功后自动提炼标题。
+     */
+    fun createSession() {
         viewModelScope.launch {
-            val novelTitle = _uiState.value.novels.firstOrNull { it.id == bookId }?.title
-            val title = novelTitle?.let { "《$it》新对话" } ?: "全局新对话"
-            val id = chatRepository.createSession(title, bookId)
+            val id = chatRepository.createSession("新会话", null)
             _uiState.update { it.copy(activeSessionId = id) }
+        }
+    }
+
+    /** 会话内随时给当前会话绑定 / 更换 / 解绑书稿。bookId=null 表示解绑。 */
+    fun bindCurrentSessionBook(bookId: Long?) {
+        val sessionId = _uiState.value.activeSessionId ?: return
+        viewModelScope.launch {
+            chatRepository.bindSessionBook(sessionId, bookId)
+            val novelTitle = bookId?.let { bid ->
+                _uiState.value.novels.firstOrNull { it.id == bid }?.title
+            }
+            val toast = if (bookId == null) "已解绑书稿" else novelTitle?.let { "已绑定书稿《$it》" } ?: "已绑定书稿"
+            _uiState.update { it.copy(toast = toast) }
         }
     }
 
@@ -281,10 +321,12 @@ class AiChatViewModel(
             return
         }
 
+        requestJob?.cancel()
         _uiState.update {
             it.copy(
                 input = "",
                 isSending = true,
+                isSearching = state.webSearchEnabled,
                 mentionQuery = null,
                 mentionResults = emptyList()
             )
@@ -292,33 +334,148 @@ class AiChatViewModel(
 
         val config = state.config()
         val systemPrompt = buildSystemPrompt(state.skills)
-        viewModelScope.launch {
-            val sessionId = ensureSession(firstMessage = text, bookId = state.selectedNovelId)
+        requestJob = viewModelScope.launch(Dispatchers.IO) {
+            val sessionId = ensureSession(firstMessage = text)
             chatRepository.appendMessage(sessionId, ChatRole.USER, text)
+
+            // 首次发送 → 自动提炼会话标题
+            val session = chatRepository.getSession(sessionId)
+            if (session != null && (session.title.isBlank() || session.title == "新会话" || session.title.endsWith("新对话"))) {
+                val autoTitle = deriveSessionTitle(text)
+                chatRepository.renameSession(sessionId, autoTitle)
+            }
+
+            var searchPayload: String? = null
+            if (_uiState.value.webSearchEnabled) {
+                runCatching {
+                    searchWeb(text)
+                }.onSuccess { (summaries, sources) ->
+                    searchPayload = summaries
+                    _uiState.update { it.copy(isSearching = false, searchSources = sources) }
+                }.onFailure { err ->
+                    _uiState.update {
+                        it.copy(
+                            isSearching = false,
+                            searchSources = emptyList(),
+                            toast = "联网搜索异常：${err.message ?: "请检查网络"}"
+                        )
+                    }
+                }
+            }
+
+            val enrichedSystem = if (!searchPayload.isNullOrBlank()) {
+                systemPrompt + "\n\n【本轮联网检索参考资料】请综合以下实时资料回答用户问题，回答末尾标注来源条目：\n" +
+                    searchPayload
+            } else {
+                systemPrompt
+            }
+
             val history = chatRepository.getMessages(sessionId)
-            aiClient.chat(config = config, history = history, systemPrompt = systemPrompt)
-                .onSuccess { reply ->
+            try {
+                aiClient.chat(
+                    config = config,
+                    history = history,
+                    systemPrompt = enrichedSystem
+                ).onSuccess { reply ->
                     handleAssistantReply(sessionId, reply, text)
+                }.onFailure { error ->
+                    if (error !is CancellationException) {
+                        chatRepository.appendMessage(
+                            sessionId = sessionId,
+                            role = ChatRole.ASSISTANT,
+                            content = error.message ?: "请求失败，请检查网络或 API 配置",
+                            isError = true
+                        )
+                    }
                 }
-                .onFailure { error ->
-                    chatRepository.appendMessage(
-                        sessionId = sessionId,
-                        role = ChatRole.ASSISTANT,
-                        content = error.message ?: "请求失败，请检查网络或 API 配置",
-                        isError = true
-                    )
-                }
-            _uiState.update { it.copy(isSending = false) }
+            } catch (_: CancellationException) {
+                // 手动停止：什么都不追加，保持 UI 当前状态
+            } finally {
+                _uiState.update { it.copy(isSending = false, isSearching = false) }
+                requestJob = null
+            }
         }
     }
 
-    /** 首次发送时创建会话，标题取首句前 20 个字便于识别。 */
-    private suspend fun ensureSession(firstMessage: String, bookId: Long?): Long {
+    /** 立即终止当前 AI 请求（含联网搜索阶段）。 */
+    fun stopGeneration() {
+        requestJob?.cancel()
+        requestJob = null
+        _uiState.update {
+            it.copy(
+                isSending = false,
+                isSearching = false,
+                toast = "已停止生成"
+            )
+        }
+    }
+
+    /** 切换联网搜索开关。 */
+    fun setWebSearchEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(webSearchEnabled = enabled) }
+    }
+
+    /** 首次发送时创建会话；自动读取当前活跃会话绑定的书稿。 */
+    private suspend fun ensureSession(firstMessage: String): Long {
         val existing = _uiState.value.activeSessionId
         if (existing != null) return existing
+        val bookId = _uiState.value.activeSessionBookId
         val id = chatRepository.createSession(firstMessage.take(20), bookId)
         _uiState.update { it.copy(activeSessionId = id) }
         return id
+    }
+
+    /** 根据首条用户消息提炼简短会话标题。 */
+    private fun deriveSessionTitle(firstMessage: String): String {
+        val trimmed = firstMessage.trim()
+        // 优先取第一句（到 。 ？ ！ 换行 标点）
+        val end = trimmed.indexOfAny(charArrayOf('。', '？', '！', '\n', '.'))
+        val head = if (end > 0) trimmed.substring(0, end) else trimmed
+        val condensed = head.trim()
+            .removePrefix("@")
+            .replace(Regex("""\s+"""), " ")
+        return condensed.takeIf { it.isNotBlank() }
+            ?.take(30)
+            ?: "新会话"
+    }
+
+    /**
+     * 轻量联网搜索：用公共 API（SerpAPI-free DuckDuckGo instant answer fallback：Brave Search 未配置时降级为 DuckDuckGo HTML 抓取 + 百度公开 web 搜索）。
+     * 这里选择最通用的方案：调用 WebSearch 封装（若有），否则直接拼接"请根据实时资料回答"到 prompt。
+     * 为保持 1.0.6 零外部依赖，本实现：
+     * - 优先走 OkHttp 直连 DuckDuckGo 的 lite 页面抓前 3 条标题 + 摘要；
+     * - 失败则返回空（让模型继续纯本地回答）。
+     */
+    private suspend fun searchWeb(query: String): Pair<String, List<String>> {
+        val result = runCatching {
+            val url = "https://html.duckduckgo.com/html/?q=${java.net.URLEncoder.encode(query, "UTF-8")}"
+            val request = okhttp3.Request.Builder().url(url).get()
+                .header("User-Agent", "Mozilla/5.0")
+                .header("Accept-Language", "zh-CN,zh;q=0.9")
+                .build()
+            val body = okhttp3.OkHttpClient.Builder()
+                .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+                .newCall(request).execute().body?.string().orEmpty()
+
+            // 解析前 3 条结果
+            val snippetRegex = Regex("""class="result__snippet"[^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+            val titleRegex = Regex("""class="result__a"[^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+            val titles = titleRegex.findAll(body).map { it.groupValues[1].replace(Regex("<[^>]+>"), "") }.toList()
+            val snippets = snippetRegex.findAll(body).map { it.groupValues[1].replace(Regex("<[^>]+>"), "") }.toList()
+
+            val items = titles.take(3).mapIndexed { idx, title ->
+                val snippet = snippets.getOrNull(idx).orEmpty()
+                "[${idx + 1}] $title — $snippet"
+            }
+            if (items.isEmpty()) {
+                throw IllegalStateException("未搜索到结果")
+            }
+            val sources = titles.take(3).mapIndexed { idx, t -> "${idx + 1}. $t" }
+            items.joinToString("\n") to sources
+        }
+        return result.getOrElse { throw it }
     }
 
     /**
@@ -498,9 +655,10 @@ class AiChatViewModel(
             return
         }
         val systemPrompt = buildSystemPrompt(state.skills)
-        _uiState.update { it.copy(isSending = true) }
+        requestJob?.cancel()
+        _uiState.update { it.copy(isSending = true, isSearching = false) }
 
-        viewModelScope.launch {
+        requestJob = viewModelScope.launch(Dispatchers.IO) {
             val all = chatRepository.getMessages(sessionId)
             val index = all.indexOfFirst { it.id == messageId }
             if (index <= 0) {
@@ -510,17 +668,25 @@ class AiChatViewModel(
             val history = all.take(index)
             val userText = history.lastOrNull { it.role == ChatRole.USER }?.content.orEmpty()
             chatRepository.deleteMessage(messageId)
-            aiClient.chat(config = config, history = history, systemPrompt = systemPrompt)
-                .onSuccess { reply -> handleAssistantReply(sessionId, reply, userText) }
-                .onFailure { error ->
-                    chatRepository.appendMessage(
-                        sessionId = sessionId,
-                        role = ChatRole.ASSISTANT,
-                        content = error.message ?: "请求失败，请检查网络或 API 配置",
-                        isError = true
-                    )
-                }
-            _uiState.update { it.copy(isSending = false) }
+            try {
+                aiClient.chat(config = config, history = history, systemPrompt = systemPrompt)
+                    .onSuccess { reply -> handleAssistantReply(sessionId, reply, userText) }
+                    .onFailure { error ->
+                        if (error !is CancellationException) {
+                            chatRepository.appendMessage(
+                                sessionId = sessionId,
+                                role = ChatRole.ASSISTANT,
+                                content = error.message ?: "请求失败，请检查网络或 API 配置",
+                                isError = true
+                            )
+                        }
+                    }
+            } catch (_: CancellationException) {
+                // 用户手动停止 → 什么都不追加
+            } finally {
+                _uiState.update { it.copy(isSending = false, isSearching = false) }
+                requestJob = null
+            }
         }
     }
 

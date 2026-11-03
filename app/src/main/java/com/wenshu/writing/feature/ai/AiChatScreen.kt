@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Save
+import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -120,8 +121,7 @@ fun AiChatScreen(
     var saveMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var messageToDelete by remember { mutableStateOf<ChatMessage?>(null) }
     var sessionToDelete by remember { mutableStateOf<ChatSession?>(null) }
-    var showNewSessionDialog by remember { mutableStateOf(false) }
-    var showBookPicker by remember { mutableStateOf(false) }
+    var showBindBookDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.pipelineSkill) {
         val skill = state.pipelineSkill ?: return@LaunchedEffect
@@ -156,6 +156,9 @@ fun AiChatScreen(
     }
 
     val activeSession = state.sessions.firstOrNull { it.id == state.activeSessionId }
+    val activeBookTitle = state.activeSessionBookId?.let { bid ->
+        state.novels.firstOrNull { it.id == bid }?.title
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -177,7 +180,7 @@ fun AiChatScreen(
                     )
                     Spacer(Modifier.height(12.dp))
                     Button(
-                        onClick = { showNewSessionDialog = true },
+                        onClick = { viewModel.createSession() },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp)
@@ -241,14 +244,33 @@ fun AiChatScreen(
                         }
                     },
                     title = {
-                        Text(
-                            text = activeSession?.title ?: "AI 对话",
-                            style = MaterialTheme.typography.titleLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Column {
+                            Text(
+                                text = activeSession?.title ?: "AI 对话",
+                                style = MaterialTheme.typography.titleLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = activeBookTitle?.let { "绑定：《$it》" } ?: "全局会话",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
                     },
                     actions = {
+                        IconButton(onClick = { showBindBookDialog = true }) {
+                            Icon(
+                                Icons.Outlined.AutoAwesome,
+                                contentDescription = "绑定书稿",
+                                tint = if (state.activeSessionId != null) {
+                                    MaterialTheme.colorScheme.onSurface
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                                }
+                            )
+                        }
                         if (state.messages.isNotEmpty()) {
                             IconButton(onClick = viewModel::clearConversation) {
                                 Icon(Icons.Outlined.DeleteOutline, contentDescription = "清空对话")
@@ -269,6 +291,7 @@ fun AiChatScreen(
                     providerName = state.providerName,
                     model = state.model,
                     isSending = state.isSending,
+                    isSearching = state.isSearching,
                     lastMessageIsError = state.messages.lastOrNull()?.isError == true,
                     onClick = onOpenProviders
                 )
@@ -298,7 +321,7 @@ fun AiChatScreen(
                         )
                     }
                     if (state.isSending) {
-                        item(key = "typing") { TypingBubble() }
+                        item(key = "typing") { TypingBubble(isSearching = state.isSearching) }
                     }
                 }
 
@@ -314,38 +337,89 @@ fun AiChatScreen(
                 InputBar(
                     input = state.input,
                     isSending = state.isSending,
+                    webSearchEnabled = state.webSearchEnabled,
                     onInputChange = viewModel::updateInput,
-                    onSend = viewModel::sendMessage
+                    onSend = viewModel::sendMessage,
+                    onStop = viewModel::stopGeneration,
+                    onToggleSearch = viewModel::setWebSearchEnabled
                 )
             }
         }
     }
 
-    if (showNewSessionDialog) {
-        NewSessionDialog(
-            hasBooks = state.novels.isNotEmpty(),
-            onGlobalSession = {
-                viewModel.createSession(null)
-                showNewSessionDialog = false
-                scope.launch { drawerState.close() }
+    if (showBindBookDialog) {
+        AlertDialog(
+            onDismissRequest = { showBindBookDialog = false },
+            title = { Text("绑定书稿") },
+            text = {
+                Column {
+                    Text(
+                        text = "当前会话：${activeSession?.title ?: "无"}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                        items(items = state.novels, key = { it.id }) { novel ->
+                            val isBound = state.activeSessionBookId == novel.id
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        viewModel.bindCurrentSessionBook(novel.id)
+                                        showBindBookDialog = false
+                                    }
+                                    .padding(vertical = 10.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = novel.title,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (isBound) {
+                                    Icon(
+                                        Icons.Outlined.AutoAwesome,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                        item(key = "unbind") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        viewModel.bindCurrentSessionBook(null)
+                                        showBindBookDialog = false
+                                    }
+                                    .padding(vertical = 10.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Close,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    text = if (state.activeSessionBookId == null) "保持全局会话" else "解绑书稿（变回全局会话）",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
             },
-            onBindBookSession = {
-                showNewSessionDialog = false
-                showBookPicker = true
-            },
-            onDismiss = { showNewSessionDialog = false }
-        )
-    }
-
-    if (showBookPicker) {
-        BookPickerDialog(
-            novels = state.novels,
-            onSelect = { novelId ->
-                viewModel.createSession(novelId)
-                showBookPicker = false
-                scope.launch { drawerState.close() }
-            },
-            onDismiss = { showBookPicker = false }
+            confirmButton = {
+                TextButton(onClick = { showBindBookDialog = false }) { Text("关闭") }
+            }
         )
     }
 
@@ -527,85 +601,6 @@ private fun SessionDrawerItem(
     }
 }
 
-@Composable
-private fun NewSessionDialog(
-    hasBooks: Boolean,
-    onGlobalSession: () -> Unit,
-    onBindBookSession: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("新建会话") },
-        text = {
-            Column {
-                TextButton(
-                    onClick = onGlobalSession,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("全局会话（不绑定书稿）")
-                }
-                TextButton(
-                    onClick = onBindBookSession,
-                    enabled = hasBooks,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = if (hasBooks) "绑定书稿会话" else "绑定书稿会话（请先新建书稿）",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        }
-    )
-}
-
-/** 绑定书稿会话时弹出的书稿选择列表。 */
-@Composable
-private fun BookPickerDialog(
-    novels: List<Novel>,
-    onSelect: (Long) -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("选择要绑定的书稿") },
-        text = {
-            LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
-                items(items = novels, key = { it.id }) { novel ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelect(novel.id) }
-                            .padding(vertical = 10.dp, horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = novel.title,
-                            style = MaterialTheme.typography.bodyLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Icon(
-                            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        }
-    )
-}
-
 /** 保存弹窗：选择书稿与保存目标（新增章节 / 写入大纲 / 保存到备忘录）。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -712,13 +707,21 @@ private fun ProviderSummaryBar(
     providerName: String?,
     model: String,
     isSending: Boolean,
+    isSearching: Boolean,
     lastMessageIsError: Boolean,
     onClick: () -> Unit
 ) {
     val statusColor = when {
-        isSending -> Color(0xFFF5A623)
+        isSearching -> Color(0xFFF59E0B)
+        isSending -> Color(0xFF3B82F6)
         lastMessageIsError -> Color(0xFFE53935)
         else -> Color(0xFF43A047)
+    }
+    val label = when {
+        isSearching -> "联网搜索中"
+        isSending -> "模型生成中"
+        lastMessageIsError -> "异常"
+        else -> "空闲"
     }
     Row(
         modifier = Modifier
@@ -735,7 +738,7 @@ private fun ProviderSummaryBar(
         )
         Spacer(Modifier.width(8.dp))
         Text(
-            text = "当前提供商：${providerName ?: "未配置"}｜模型：${model.ifBlank { "未配置" }}",
+            text = "当前提供商：${providerName ?: "未配置"}｜模型：${model.ifBlank { "未配置" }}｜$label",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -875,7 +878,7 @@ private fun MessageAction(
 }
 
 @Composable
-private fun TypingBubble() {
+private fun TypingBubble(isSearching: Boolean) {
     Row(modifier = Modifier.fillMaxWidth()) {
         Surface(
             color = MaterialTheme.colorScheme.surface,
@@ -889,7 +892,7 @@ private fun TypingBubble() {
                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "正在生成…",
+                    text = if (isSearching) "联网检索中…" else "正在生成…",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1003,44 +1006,93 @@ private fun SkillMentionPanel(
 private fun InputBar(
     input: String,
     isSending: Boolean,
+    webSearchEnabled: Boolean,
     onInputChange: (String) -> Unit,
-    onSend: () -> Unit
+    onSend: () -> Unit,
+    onStop: () -> Unit,
+    onToggleSearch: (Boolean) -> Unit
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 2.dp
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.Bottom
+                .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = onInputChange,
-                placeholder = { Text("描述你想写的情节，或直接粘贴完整大纲…") },
-                maxLines = 4,
-                shape = RoundedCornerShape(22.dp),
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(8.dp))
-            FilledIconButton(
-                onClick = onSend,
-                enabled = input.trim().isNotEmpty() && !isSending,
-                modifier = Modifier.size(48.dp)
-            ) {
-                if (isSending) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
-                    )
-                } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(
+                            if (webSearchEnabled) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant
+                            }
+                        )
+                        .clickable { onToggleSearch(!webSearchEnabled) }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
                     Icon(
-                        Icons.AutoMirrored.Outlined.Send,
-                        contentDescription = "发送"
+                        Icons.Outlined.SmartToy,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = if (webSearchEnabled) {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
                     )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = if (webSearchEnabled) "联网搜索·开" else "联网搜索·关",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (webSearchEnabled) {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = onInputChange,
+                    placeholder = { Text("描述你想写的情节，或直接粘贴完整大纲…") },
+                    maxLines = 4,
+                    shape = RoundedCornerShape(22.dp),
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(8.dp))
+                if (isSending) {
+                    IconButton(
+                        onClick = onStop,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            Icons.Outlined.Close,
+                            contentDescription = "停止生成"
+                        )
+                    }
+                } else {
+                    FilledIconButton(
+                        onClick = onSend,
+                        enabled = input.trim().isNotEmpty(),
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.Send,
+                            contentDescription = "发送"
+                        )
+                    }
                 }
             }
         }
