@@ -2,8 +2,11 @@ package com.wenshu.writing.feature.ai
 
 import android.widget.Toast
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +47,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -62,12 +66,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,8 +81,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -117,11 +125,22 @@ fun AiChatScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     var saveMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var messageToDelete by remember { mutableStateOf<ChatMessage?>(null) }
     var sessionToDelete by remember { mutableStateOf<ChatSession?>(null) }
     var showBindBookDialog by remember { mutableStateOf(false) }
+    var showLogDialog by remember { mutableStateOf(false) }
+
+    /** 对话视口是否已在最底部，用于控制「一键到底」浮动按钮。 */
+    val isAtBottom by remember(listState) {
+        derivedStateOf {
+            val layout = listState.layoutInfo
+            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
+            layout.totalItemsCount == 0 || lastVisible >= layout.totalItemsCount - 1
+        }
+    }
 
     LaunchedEffect(state.pipelineSkill) {
         val skill = state.pipelineSkill ?: return@LaunchedEffect
@@ -150,15 +169,12 @@ fun AiChatScreen(
         val itemCount = state.messages.size +
             (if (state.messages.isEmpty()) 1 else 0) +
             (if (state.isSending) 1 else 0)
-        if (itemCount > 0) {
+        if (itemCount > 0 && isAtBottom) {
             listState.animateScrollToItem(itemCount - 1)
         }
     }
 
     val activeSession = state.sessions.firstOrNull { it.id == state.activeSessionId }
-    val activeBookTitle = state.activeSessionBookId?.let { bid ->
-        state.novels.firstOrNull { it.id == bid }?.title
-    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -224,6 +240,37 @@ fun AiChatScreen(
                             }
                         }
                     }
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 20.dp, end = 16.dp, top = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Skill 调试日志", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                text = "记录 Agent 轮次与工具执行",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = state.skillLogEnabled,
+                            onCheckedChange = viewModel::setSkillLogEnabled
+                        )
+                    }
+                    if (state.skillLogEnabled) {
+                        TextButton(
+                            onClick = { showLogDialog = true },
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        ) {
+                            Text("查看日志（${state.skillLogs.size}）")
+                        }
+                    }
                 }
             }
         }
@@ -244,18 +291,21 @@ fun AiChatScreen(
                         }
                     },
                     title = {
-                        Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 text = activeSession?.title ?: "AI 对话",
                                 style = MaterialTheme.typography.titleLarge,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
-                            Text(
-                                text = activeBookTitle?.let { "绑定：《$it》" } ?: "全局会话",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
+                            Spacer(Modifier.width(10.dp))
+                            ModelStatusChip(
+                                model = state.model,
+                                isSending = state.isSending,
+                                isSearching = state.isSearching,
+                                lastMessageIsError = state.messages.lastOrNull()?.isError == true,
+                                onClick = onOpenProviders
                             )
                         }
                     },
@@ -286,42 +336,74 @@ fun AiChatScreen(
                     .fillMaxSize()
                     .padding(innerPadding)
                     .imePadding()
+                    .pointerInput(Unit) {
+                        detectTapGestures(onTap = { keyboardController?.hide() })
+                    }
             ) {
-                ProviderSummaryBar(
-                    providerName = state.providerName,
-                    model = state.model,
-                    isSending = state.isSending,
-                    isSearching = state.isSearching,
-                    lastMessageIsError = state.messages.lastOrNull()?.isError == true,
-                    onClick = onOpenProviders
-                )
-
-                LazyColumn(
-                    state = listState,
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .weight(1f)
                 ) {
-                    if (state.messages.isEmpty()) {
-                        item(key = "greeting") { GreetingBubble() }
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (state.messages.isEmpty()) {
+                            item(key = "greeting") { GreetingBubble() }
+                        }
+                        items(items = state.messages, key = { it.id }) { message ->
+                            MessageBubble(
+                                message = message,
+                                isSending = state.isSending,
+                                onCopy = {
+                                    clipboard.setText(AnnotatedString(message.content))
+                                    Toast.makeText(context, "复制成功", Toast.LENGTH_SHORT).show()
+                                },
+                                onSave = { saveMessage = message },
+                                onDelete = { messageToDelete = message },
+                                onRegenerate = { viewModel.regenerateMessage(message.id) },
+                                onEdit = { viewModel.startEditingMessage(message) }
+                            )
+                        }
+                        if (state.isSending) {
+                            item(key = "typing") {
+                                TypingBubble(
+                                    isSearching = state.isSearching,
+                                    streamingText = state.streamingText,
+                                    activeToolName = state.activeToolName
+                                )
+                            }
+                        }
                     }
-                    items(items = state.messages, key = { it.id }) { message ->
-                        MessageBubble(
-                            message = message,
-                            isSending = state.isSending,
-                            onCopy = {
-                                clipboard.setText(AnnotatedString(message.content))
-                                Toast.makeText(context, "复制成功", Toast.LENGTH_SHORT).show()
+
+                    if (!isAtBottom) {
+                        Surface(
+                            onClick = {
+                                scope.launch {
+                                    val itemCount = listState.layoutInfo.totalItemsCount
+                                    if (itemCount > 0) listState.animateScrollToItem(itemCount - 1)
+                                }
                             },
-                            onSave = { saveMessage = message },
-                            onDelete = { messageToDelete = message },
-                            onRegenerate = { viewModel.regenerateMessage(message.id) }
-                        )
-                    }
-                    if (state.isSending) {
-                        item(key = "typing") { TypingBubble(isSearching = state.isSearching) }
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            tonalElevation = 3.dp,
+                            shadowElevation = 2.dp,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 10.dp)
+                                .size(40.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = "↓",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -337,10 +419,12 @@ fun AiChatScreen(
                 InputBar(
                     input = state.input,
                     isSending = state.isSending,
+                    isEditing = state.editingMessageId != null,
                     webSearchEnabled = state.webSearchEnabled,
                     onInputChange = viewModel::updateInput,
                     onSend = viewModel::sendMessage,
                     onStop = viewModel::stopGeneration,
+                    onCancelEdit = viewModel::cancelEditingMessage,
                     onToggleSearch = viewModel::setWebSearchEnabled
                 )
             }
@@ -446,7 +530,7 @@ fun AiChatScreen(
         AlertDialog(
             onDismissRequest = { messageToDelete = null },
             title = { Text("删除消息") },
-            text = { Text("确定删除这条消息？仅从当前会话移除，书稿数据不受影响。") },
+            text = { Text("确定要删除这条消息吗？仅从当前会话移除，书稿数据不受影响。") },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -534,6 +618,70 @@ fun AiChatScreen(
             },
             dismissButton = {
                 TextButton(onClick = viewModel::dismissTitleInput) { Text("取消") }
+            }
+        )
+    }
+
+    state.pendingQuestion?.let { question ->
+        AlertDialog(
+            onDismissRequest = { viewModel.answerQuestion("取消") },
+            title = { Text(question.header.ifBlank { "需要确认" }) },
+            text = {
+                Column {
+                    Text(question.question, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(8.dp))
+                    question.options.forEach { option ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.answerQuestion(option.label) }
+                                .padding(vertical = 10.dp, horizontal = 4.dp)
+                        ) {
+                            Column {
+                                Text(option.label, style = MaterialTheme.typography.titleSmall)
+                                if (option.description.isNotBlank()) {
+                                    Text(
+                                        option.description,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.answerQuestion("取消") }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showLogDialog) {
+        AlertDialog(
+            onDismissRequest = { showLogDialog = false },
+            title = { Text("Skill 执行日志") },
+            text = {
+                if (state.skillLogs.isEmpty()) {
+                    Text("暂无日志。开启开关后，发送消息即可记录 Agent 轮次与工具调用。")
+                } else {
+                    LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                        items(items = state.skillLogs) { line ->
+                            Text(
+                                text = line,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showLogDialog = false }) { Text("关闭") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.clearSkillLogs() }) { Text("清空") }
             }
         )
     }
@@ -702,9 +850,10 @@ private fun SaveToBookDialog(
     )
 }
 
+/** 顶部模型状态：模型名称 + 状态圆点（绿=正常，黄=生成中，红=异常），点击进入提供商管理。 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ProviderSummaryBar(
-    providerName: String?,
+private fun ModelStatusChip(
     model: String,
     isSending: Boolean,
     isSearching: Boolean,
@@ -712,45 +861,35 @@ private fun ProviderSummaryBar(
     onClick: () -> Unit
 ) {
     val statusColor = when {
-        isSearching -> Color(0xFFF59E0B)
-        isSending -> Color(0xFF3B82F6)
+        isSending || isSearching -> Color(0xFFF59E0B)
         lastMessageIsError -> Color(0xFFE53935)
         else -> Color(0xFF43A047)
     }
-    val label = when {
-        isSearching -> "联网搜索中"
-        isSending -> "模型生成中"
-        lastMessageIsError -> "异常"
-        else -> "空闲"
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        tonalElevation = 0.dp
     ) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(statusColor)
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = "当前提供商：${providerName ?: "未配置"}｜模型：${model.ifBlank { "未配置" }}｜$label",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-        Icon(
-            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-            contentDescription = "管理 AI 提供商",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(16.dp)
-        )
+        Row(
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(statusColor)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = model.ifBlank { "未配置模型" },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 
@@ -783,6 +922,7 @@ private fun GreetingBubble() {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     message: ChatMessage,
@@ -790,64 +930,133 @@ private fun MessageBubble(
     onCopy: () -> Unit,
     onSave: () -> Unit,
     onDelete: () -> Unit,
-    onRegenerate: () -> Unit
+    onRegenerate: () -> Unit,
+    onEdit: () -> Unit
 ) {
     val isUser = message.role == ChatRole.USER
+    var menuExpanded by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
-        Surface(
-            color = when {
-                message.isError -> MaterialTheme.colorScheme.errorContainer
-                isUser -> MaterialTheme.colorScheme.primaryContainer
-                else -> MaterialTheme.colorScheme.surface
-            },
-            contentColor = when {
-                message.isError -> MaterialTheme.colorScheme.onErrorContainer
-                isUser -> MaterialTheme.colorScheme.onPrimaryContainer
-                else -> MaterialTheme.colorScheme.onSurface
-            },
-            shape = RoundedCornerShape(
-                topStart = 18.dp,
-                topEnd = 18.dp,
-                bottomStart = if (isUser) 18.dp else 6.dp,
-                bottomEnd = if (isUser) 6.dp else 18.dp
-            ),
-            tonalElevation = if (isUser) 0.dp else 1.dp,
-            modifier = Modifier.widthIn(max = 340.dp)
-        ) {
-            Column(
+        Box {
+            Surface(
+                color = when {
+                    message.isError -> MaterialTheme.colorScheme.errorContainer
+                    isUser -> MaterialTheme.colorScheme.primaryContainer
+                    else -> MaterialTheme.colorScheme.surface
+                },
+                contentColor = when {
+                    message.isError -> MaterialTheme.colorScheme.onErrorContainer
+                    isUser -> MaterialTheme.colorScheme.onPrimaryContainer
+                    else -> MaterialTheme.colorScheme.onSurface
+                },
+                shape = RoundedCornerShape(
+                    topStart = 18.dp,
+                    topEnd = 18.dp,
+                    bottomStart = if (isUser) 18.dp else 6.dp,
+                    bottomEnd = if (isUser) 6.dp else 18.dp
+                ),
+                tonalElevation = if (isUser) 0.dp else 1.dp,
                 modifier = Modifier
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
-                    .animateContentSize()
+                    .widthIn(max = 340.dp)
+                    .then(
+                        if (isUser) {
+                            Modifier.combinedClickable(
+                                onClick = {},
+                                onLongClick = { menuExpanded = true }
+                            )
+                        } else {
+                            Modifier
+                        }
+                    )
             ) {
-                SelectionContainer {
-                    Text(
-                        text = message.content,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-                if (!isUser && !message.isError) {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(top = 6.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        MessageAction(Icons.Outlined.ContentCopy, onClick = onCopy)
-                        MessageAction(Icons.Outlined.Save, onClick = onSave)
-                        MessageAction(Icons.Outlined.DeleteOutline, onClick = onDelete)
-                        MessageAction(
-                            Icons.Outlined.Refresh,
-                            enabled = !isSending,
-                            onClick = onRegenerate
+                Column(
+                    modifier = Modifier
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                        .animateContentSize()
+                ) {
+                    if (isUser) {
+                        // 用户气泡不使用 SelectionContainer，避免长按被文本选择拦截。
+                        Text(
+                            text = message.content,
+                            style = MaterialTheme.typography.bodyMedium
                         )
+                    } else {
+                        SelectionContainer {
+                            Text(
+                                text = message.content,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                    if (message.isError) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(
+                                onClick = onRegenerate,
+                                enabled = !isSending
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text("重新生成")
+                            }
+                        }
+                    }
+                    if (!isUser && !message.isError) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(top = 6.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            MessageAction(Icons.Outlined.ContentCopy, onClick = onCopy)
+                            MessageAction(Icons.Outlined.Save, onClick = onSave)
+                            MessageAction(Icons.Outlined.DeleteOutline, onClick = onDelete)
+                            MessageAction(
+                                Icons.Outlined.Refresh,
+                                enabled = !isSending,
+                                onClick = onRegenerate
+                            )
+                        }
                     }
                 }
+            }
+
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("复制") },
+                    onClick = {
+                        menuExpanded = false
+                        onCopy()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("修改") },
+                    onClick = {
+                        menuExpanded = false
+                        onEdit()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("删除") },
+                    onClick = {
+                        menuExpanded = false
+                        onDelete()
+                    }
+                )
             }
         }
     }
@@ -878,24 +1087,44 @@ private fun MessageAction(
 }
 
 @Composable
-private fun TypingBubble(isSearching: Boolean) {
+private fun TypingBubble(
+    isSearching: Boolean,
+    streamingText: String,
+    activeToolName: String?
+) {
     Row(modifier = Modifier.fillMaxWidth()) {
         Surface(
             color = MaterialTheme.colorScheme.surface,
             shape = RoundedCornerShape(18.dp),
-            tonalElevation = 1.dp
+            tonalElevation = 1.dp,
+            modifier = Modifier.widthIn(max = 340.dp)
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = if (isSearching) "联网检索中…" else "正在生成…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                if (streamingText.isNotBlank()) {
+                    SelectionContainer {
+                        Text(
+                            text = streamingText,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.padding(top = if (streamingText.isBlank()) 0.dp else 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = when {
+                            isSearching -> "联网检索中…"
+                            activeToolName != null -> "执行技能工具：$activeToolName…"
+                            streamingText.isNotBlank() -> "正在生成…"
+                            else -> "正在生成…"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
@@ -1006,10 +1235,12 @@ private fun SkillMentionPanel(
 private fun InputBar(
     input: String,
     isSending: Boolean,
+    isEditing: Boolean,
     webSearchEnabled: Boolean,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    onCancelEdit: () -> Unit,
     onToggleSearch: (Boolean) -> Unit
 ) {
     Surface(
@@ -1021,6 +1252,24 @@ private fun InputBar(
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
+            if (isEditing) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "正在编辑消息",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onCancelEdit) {
+                        Text("撤回修改")
+                    }
+                }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1073,14 +1322,23 @@ private fun InputBar(
                 )
                 Spacer(Modifier.width(8.dp))
                 if (isSending) {
-                    IconButton(
+                    Surface(
                         onClick = onStop,
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(48.dp)
                     ) {
-                        Icon(
-                            Icons.Outlined.Close,
-                            contentDescription = "停止生成"
-                        )
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(MaterialTheme.colorScheme.onPrimary)
+                            )
+                        }
                     }
                 } else {
                     FilledIconButton(

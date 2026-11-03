@@ -24,18 +24,44 @@ class SkillRepository(
     }
 
     /**
-     * 把 assets/skills 下的内置技能补齐到数据库。
-     * 已存在的同名内置技能不覆盖（保留用户修改），新增的内置技能（如 1.0.4 的流水线）会自动补入。
+     * 1.0.8 起内置技能完全由 assets/skills 决定：
+     * - 删除 assets 中已不存在的旧内置技能（如旧版 novel-writer / skill-creator / 流水线）；
+     * - 已存在的同名内置技能覆盖为最新内容（保留用户的启用/停用状态）；
+     * - 用户自定义技能与导入技能不受影响。
      */
     suspend fun ensureBuiltInSkills() {
-        val existing = runCatching { skillDao.getAll().map { it.toModel() } }
-            .getOrDefault(emptyList())
         val builtIns = runCatching { loadBuiltInSkills() }.getOrDefault(emptyList())
-        val existingNames = existing.map { it.name }.toMutableSet()
-        val missing = builtIns.filter { it.name !in existingNames }
-        if (missing.isNotEmpty()) {
-            withContext(Dispatchers.IO) { skillDao.insertAll(missing) }
+        if (builtIns.isEmpty()) return
+        val existing = runCatching { skillDao.getAll() }.getOrDefault(emptyList())
+        val dbBuiltIns = existing.filter { it.isBuiltIn }
+        val newNames = builtIns.map { it.name }.toSet()
+        withContext(Dispatchers.IO) {
+            // 移除 assets 中已删除的旧内置技能
+            dbBuiltIns.filter { it.name !in newNames }.forEach { skillDao.deleteAnyById(it.id) }
+            builtIns.forEach { builtIn ->
+                val sameName = dbBuiltIns.firstOrNull { it.name == builtIn.name }
+                if (sameName != null) {
+                    skillDao.update(
+                        builtIn.copy(
+                            id = sameName.id,
+                            enabled = sameName.enabled,
+                            createdAt = sameName.createdAt
+                        )
+                    )
+                } else {
+                    skillDao.insert(builtIn)
+                }
+            }
         }
+    }
+
+    /** 按名称精确查找技能（agent 工具 skill_lookup / update_skill 使用）。 */
+    suspend fun findByName(name: String): Skill? = withContext(Dispatchers.IO) {
+        skillDao.getByName(name.trim())?.toModel()
+            ?: skillDao.getAll().firstOrNull {
+                it.name.equals(name.trim(), ignoreCase = true) ||
+                    it.name.substringBefore(" (").equals(name.trim(), ignoreCase = true)
+            }?.toModel()
     }
 
     suspend fun getAll(): List<Skill> = withContext(Dispatchers.IO) {
@@ -182,10 +208,15 @@ class SkillRepository(
         val dirs = context.assets.list(root).orEmpty().filter { it.isNotBlank() }
         val now = System.currentTimeMillis()
         return dirs.mapIndexedNotNull { index, dir ->
-            val mainPath = "$root/$dir/main.md"
-            val main = runCatching {
-                context.assets.open(mainPath).bufferedReader().use { it.readText() }
-            }.getOrNull() ?: return@mapIndexedNotNull null
+            // 兼容 SKILL.md（1.0.8 内置技能）与历史 main.md / main。
+            val main = listOf("SKILL.md", "main.md", "main")
+                .firstNotNullOfOrNull { fileName ->
+                    runCatching {
+                        context.assets.open("$root/$dir/$fileName")
+                            .bufferedReader()
+                            .use { it.readText() }
+                    }.getOrNull()
+                } ?: return@mapIndexedNotNull null
             val references = context.assets.list("$root/$dir/references")
                 .orEmpty()
                 .filter {

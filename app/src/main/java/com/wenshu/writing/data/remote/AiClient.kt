@@ -8,18 +8,31 @@ import com.wenshu.writing.domain.model.ChatMessage
 import com.wenshu.writing.domain.model.ChatRole
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSource
 import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
@@ -27,9 +40,40 @@ import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 
+/** Agent 循环中的一条模型 tool_call。 */
+data class AgentToolCall(
+    val id: String,
+    val name: String,
+    val arguments: String = ""
+)
+
+/**
+ * 发送给模型的统一消息结构。
+ * role = user / assistant / tool；assistant 可携带 toolCalls，tool 通过 toolCallId 关联结果。
+ */
+data class AgentMessage(
+    val role: String,
+    val content: String? = null,
+    val toolCalls: List<AgentToolCall> = emptyList(),
+    val toolCallId: String? = null
+)
+
+/** 提供给模型的本地工具声明（JSON Schema 参数）。 */
+data class AgentToolSpec(
+    val name: String,
+    val description: String,
+    val parameters: JsonObject
+)
+
+/** 一轮模型调用的结果：文本回复 + 待执行的工具调用。 */
+data class AgentTurnResult(
+    val text: String,
+    val toolCalls: List<AgentToolCall> = emptyList()
+)
+
 /**
  * OpenAI 兼容的 Chat Completions 客户端。
- * 仅负责网络请求与响应解析，便于后续替换为流式输出或多模型适配。
+ * 负责网络请求与响应解析，支持普通请求与流式（SSE）tool_call 增量聚合。
  */
 class AiClient(
     private val client: OkHttpClient = OkHttpClient.Builder()
@@ -119,6 +163,373 @@ class AiClient(
             throw e
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    /**
+     * 流式对话：逐块回调文本增量，并在流结束后返回聚合的 tool_call。
+     * 支持 OpenAI 兼容 SSE 与 Anthropic Messages SSE；协程取消时会立即 cancel 网络请求。
+     */
+    suspend fun chatStream(
+        config: AiConfig,
+        messages: List<AgentMessage>,
+        systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
+        tools: List<AgentToolSpec> = emptyList(),
+        onTextDelta: (String) -> Unit = {}
+    ): Result<AgentTurnResult> = withContext(Dispatchers.IO) {
+        require(config.baseUrl.isNotBlank()) { "请先在 API 配置中填写 API 地址" }
+        require(config.apiKey.isNotBlank()) { "请先在 API 配置中填写 API Key" }
+        require(config.model.isNotBlank()) { "请先选择模型" }
+
+        val isAnthropic = config.apiType == ApiProviderType.ANTHROPIC
+        val payload = if (isAnthropic) {
+            buildJsonObject {
+                put("model", config.model)
+                put("max_tokens", 8192)
+                put("stream", true)
+                if (systemPrompt.isNotBlank()) put("system", systemPrompt)
+                putJsonArray("messages") {
+                    anthropicMessages(messages).forEach { add(it) }
+                }
+                if (tools.isNotEmpty()) {
+                    putJsonArray("tools") {
+                        tools.forEach { tool ->
+                            add(
+                                buildJsonObject {
+                                    put("name", tool.name)
+                                    put("description", tool.description)
+                                    put("input_schema", tool.parameters)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            buildJsonObject {
+                put("model", config.model)
+                put("stream", true)
+                put("temperature", 0.8)
+                putJsonArray("messages") {
+                    if (systemPrompt.isNotBlank()) {
+                        add(buildJsonObject {
+                            put("role", "system")
+                            put("content", systemPrompt)
+                        })
+                    }
+                    messages.forEach { add(openAiMessage(it)) }
+                }
+                if (tools.isNotEmpty()) {
+                    putJsonArray("tools") {
+                        tools.forEach { tool ->
+                            add(
+                                buildJsonObject {
+                                    put("type", "function")
+                                    putJsonObject("function") {
+                                        put("name", tool.name)
+                                        put("description", tool.description)
+                                        put("parameters", tool.parameters)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        val request = Request.Builder()
+            .url(chatEndpointOf(config))
+            .apply {
+                if (isAnthropic) {
+                    header("x-api-key", config.apiKey.trim())
+                    header("anthropic-version", ANTHROPIC_VERSION)
+                } else {
+                    header("Authorization", "Bearer ${config.apiKey.trim()}")
+                }
+                header("Content-Type", "application/json")
+                header("Accept", "text/event-stream")
+            }
+            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        val call = client.newCall(request)
+        // 协程被取消（用户点停止）时立即中断阻塞的 SSE 读取。
+        val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { call.cancel() }
+        try {
+            call.execute().use { response ->
+                if (!response.isSuccessful) {
+                    val rawBody = response.body?.string().orEmpty()
+                    throw IOException("请求失败（${response.code}）：${extractErrorMessage(rawBody)}")
+                }
+                val source = response.body?.source() ?: throw IOException("服务未返回响应内容")
+                val result = if (isAnthropic) {
+                    parseAnthropicStream(source, onTextDelta)
+                } else {
+                    parseOpenAiStream(source, onTextDelta)
+                }
+                if (result.text.isBlank() && result.toolCalls.isEmpty()) {
+                    throw IOException("模型未返回有效内容")
+                }
+                Result.success(result)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (!currentCoroutineContext().isActive) {
+                throw CancellationException("已停止生成")
+            }
+            Result.failure(e)
+        } finally {
+            cancelHandle?.dispose()
+        }
+    }
+
+    /** OpenAI 兼容 SSE：聚合 delta.content 与 delta.tool_calls 分片。 */
+    private fun parseOpenAiStream(
+        source: BufferedSource,
+        onTextDelta: (String) -> Unit
+    ): AgentTurnResult {
+        val text = StringBuilder()
+        val toolCalls = sortedMapOf<Int, ToolCallAccumulator>()
+        while (true) {
+            val line = source.readUtf8Line() ?: break
+            if (!line.startsWith("data:")) continue
+            val data = line.removePrefix("data:").trim()
+            if (data.isEmpty()) continue
+            if (data == "[DONE]") break
+            val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull()
+                ?: continue
+            obj["error"]?.let { error ->
+                val message = error.jsonObject["message"]?.jsonPrimitive?.contentOrNull
+                throw IOException(message ?: "模型返回错误")
+            }
+            val choices = runCatching { obj["choices"]?.jsonArray }.getOrNull() ?: continue
+            val delta = choices.firstOrNull()?.jsonObject?.get("delta")?.jsonObject ?: continue
+            delta["content"]?.jsonPrimitive?.contentOrNull?.let { chunk ->
+                if (chunk.isNotEmpty()) {
+                    text.append(chunk)
+                    onTextDelta(chunk)
+                }
+            }
+            runCatching { delta["tool_calls"]?.jsonArray }.getOrNull()?.forEach { element ->
+                val call = element.jsonObject
+                val index = call["index"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+                val accumulator = toolCalls.getOrPut(index) { ToolCallAccumulator() }
+                call["id"]?.jsonPrimitive?.contentOrNull
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { accumulator.id = it }
+                val function = call["function"]?.jsonObject
+                function?.get("name")?.jsonPrimitive?.contentOrNull
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { accumulator.name = it }
+                function?.get("arguments")?.jsonPrimitive?.contentOrNull
+                    ?.let { accumulator.arguments.append(it) }
+            }
+        }
+        val calls = toolCalls.entries
+            .filter { it.value.name.isNotBlank() }
+            .map { (index, acc) ->
+                AgentToolCall(
+                    id = acc.id.ifBlank { "call_${index}_${System.currentTimeMillis()}" },
+                    name = acc.name,
+                    arguments = acc.arguments.toString()
+                )
+            }
+        return AgentTurnResult(text.toString(), calls)
+    }
+
+    /** Anthropic Messages SSE：text_delta 与 input_json_delta 分片。 */
+    private fun parseAnthropicStream(
+        source: BufferedSource,
+        onTextDelta: (String) -> Unit
+    ): AgentTurnResult {
+        val textBlocks = sortedMapOf<Int, StringBuilder>()
+        val toolBlocks = sortedMapOf<Int, ToolCallAccumulator>()
+        while (true) {
+            val line = source.readUtf8Line() ?: break
+            if (!line.startsWith("data:")) continue
+            val data = line.removePrefix("data:").trim()
+            if (data.isEmpty()) continue
+            val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull()
+                ?: continue
+            when (obj["type"]?.jsonPrimitive?.contentOrNull) {
+                "content_block_start" -> {
+                    val index = obj["index"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+                    val block = obj["content_block"]?.jsonObject ?: continue
+                    val type = block["type"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    if (type == "tool_use") {
+                        toolBlocks[index] = ToolCallAccumulator(
+                            id = block["id"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                            name = block["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                        )
+                    } else {
+                        textBlocks.getOrPut(index) { StringBuilder() }
+                    }
+                }
+                "content_block_delta" -> {
+                    val index = obj["index"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+                    val delta = obj["delta"]?.jsonObject ?: continue
+                    when (delta["type"]?.jsonPrimitive?.contentOrNull) {
+                        "text_delta" -> {
+                            val chunk = delta["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                            if (chunk.isNotEmpty()) {
+                                textBlocks.getOrPut(index) { StringBuilder() }.append(chunk)
+                                onTextDelta(chunk)
+                            }
+                        }
+                        "input_json_delta" -> {
+                            delta["partial_json"]?.jsonPrimitive?.contentOrNull
+                                ?.let { toolBlocks.getOrPut(index) { ToolCallAccumulator() }
+                                    .arguments.append(it) }
+                        }
+                    }
+                }
+                "error" -> {
+                    val message = obj["error"]?.jsonObject?.get("message")
+                        ?.jsonPrimitive?.contentOrNull
+                    throw IOException(message ?: "模型返回错误")
+                }
+                "message_stop" -> break
+            }
+        }
+        val text = textBlocks.values.joinToString("") { it.toString() }
+        val calls = toolBlocks.entries
+            .filter { it.value.name.isNotBlank() }
+            .map { (index, acc) ->
+                AgentToolCall(
+                    id = acc.id.ifBlank { "call_${index}_${System.currentTimeMillis()}" },
+                    name = acc.name,
+                    arguments = acc.arguments.toString()
+                )
+            }
+        return AgentTurnResult(text, calls)
+    }
+
+    private class ToolCallAccumulator(
+        var id: String = "",
+        var name: String = "",
+        val arguments: StringBuilder = StringBuilder()
+    )
+
+    /** OpenAI 消息 JSON：assistant 的 tool_calls 需要原样回传，tool 消息携带 tool_call_id。 */
+    private fun openAiMessage(message: AgentMessage): JsonObject = buildJsonObject {
+        put("role", message.role)
+        when {
+            message.role == "assistant" && message.toolCalls.isNotEmpty() -> {
+                if (message.content.isNullOrBlank()) put("content", JsonNull)
+                else put("content", message.content)
+                putJsonArray("tool_calls") {
+                    message.toolCalls.forEach { call ->
+                        add(buildJsonObject {
+                            put("id", call.id)
+                            put("type", "function")
+                            putJsonObject("function") {
+                                put("name", call.name)
+                                put("arguments", call.arguments)
+                            }
+                        })
+                    }
+                }
+            }
+            message.role == "tool" -> {
+                put("tool_call_id", message.toolCallId ?: "")
+                put("content", message.content.orEmpty())
+            }
+            else -> put("content", message.content.orEmpty())
+        }
+    }
+
+    /**
+     * Anthropic 消息数组：tool_result 必须合并进上一条 user 消息，
+     * 否则连续多个工具结果会违反 user/assistant 交替规则。
+     */
+    private fun anthropicMessages(messages: List<AgentMessage>): List<JsonObject> {
+        val result = mutableListOf<JsonObject>()
+        messages.forEach { message ->
+            when (message.role) {
+                "tool" -> {
+                    val block = buildJsonObject {
+                        put("type", "tool_result")
+                        put("tool_use_id", message.toolCallId ?: "")
+                        put("content", message.content.orEmpty())
+                    }
+                    val last = result.lastOrNull()
+                    if (last != null &&
+                        last["role"]?.jsonPrimitive?.contentOrNull == "user" &&
+                        last["_toolResults"]?.jsonPrimitive?.contentOrNull == "1"
+                    ) {
+                        val existing = last["content"]?.jsonArray.orEmpty().toMutableList()
+                        existing.add(block)
+                        result[result.lastIndex] = buildJsonObject {
+                            put("role", "user")
+                            put("_toolResults", "1")
+                            putJsonArray("content") { existing.forEach { add(it) } }
+                        }
+                    } else {
+                        result.add(
+                            buildJsonObject {
+                                put("role", "user")
+                                put("_toolResults", "1")
+                                putJsonArray("content") { add(block) }
+                            }
+                        )
+                    }
+                }
+                "assistant" -> {
+                    if (message.toolCalls.isEmpty()) {
+                        result.add(
+                            buildJsonObject {
+                                put("role", "assistant")
+                                put("content", message.content.orEmpty())
+                            }
+                        )
+                    } else {
+                        result.add(
+                            buildJsonObject {
+                                put("role", "assistant")
+                                putJsonArray("content") {
+                                    if (!message.content.isNullOrBlank()) {
+                                        add(buildJsonObject {
+                                            put("type", "text")
+                                            put("text", message.content)
+                                        })
+                                    }
+                                    message.toolCalls.forEach { call ->
+                                        add(buildJsonObject {
+                                            put("type", "tool_use")
+                                            put("id", call.id)
+                                            put("name", call.name)
+                                            put(
+                                                "input",
+                                                runCatching {
+                                                    json.parseToJsonElement(
+                                                        call.arguments.ifBlank { "{}" }
+                                                    )
+                                                }.getOrNull() ?: JsonObject(emptyMap<String, JsonElement>())
+                                            )
+                                        })
+                                    }
+                                }
+                            }
+                        )
+                    }
+                }
+                else -> result.add(
+                    buildJsonObject {
+                        put("role", "user")
+                        put("content", message.content.orEmpty())
+                    }
+                )
+            }
+        }
+        // 去掉内部标记字段，避免被 Anthropic 拒绝。
+        return result.map { element ->
+            buildJsonObject {
+                element.forEach { (key, value) ->
+                    if (key != "_toolResults") put(key, value)
+                }
+            }
         }
     }
 

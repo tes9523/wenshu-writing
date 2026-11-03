@@ -42,4 +42,8 @@ interface SkillDao {
 
     @Query("DELETE FROM skills WHERE id = :id AND isBuiltIn = 0")
     suspend fun deleteById(id: Long)
+
+    /** 内置技能同步时使用：允许删除内置记录。 */
+    @Query("DELETE FROM skills WHERE id = :id")
+    suspend fun deleteAnyById(id: Long)
 }

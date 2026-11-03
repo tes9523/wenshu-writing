@@ -65,8 +65,7 @@ import com.wenshu.writing.ui.util.formatShortTimestamp
 @Composable
 fun WorksScreen(
     container: AppContainer,
-    onOpenNovel: (Long) -> Unit,
-    onOpenPipeline: (novelId: Long, skillId: Long) -> Unit
+    onOpenNovel: (Long) -> Unit
 ) {
     val viewModel: WorksViewModel = viewModel(
         factory = WorksViewModel.factory(
@@ -183,7 +182,6 @@ fun WorksScreen(
                     NovelCard(
                         novel = novel,
                         onClick = { viewModel.openNovel(novel.id) { onOpenNovel(novel.id) } },
-                        onStartPipeline = { onOpenPipeline(novel.id, 0L) },
                         onExport = {
                             pendingExportNovel = novel
                             exportLauncher.launch(safeFileName(novel.title) + ".zip")
@@ -229,7 +227,6 @@ private fun safeFileName(name: String): String {
 private fun NovelCard(
     novel: Novel,
     onClick: () -> Unit,
-    onStartPipeline: () -> Unit,
     onExport: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -287,14 +284,6 @@ private fun NovelCard(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false }
                 ) {
-                    DropdownMenuItem(
-                        text = { Text("开启新书流水线") },
-                        leadingIcon = { Icon(Icons.Outlined.PlayArrow, contentDescription = null) },
-                        onClick = {
-                            menuExpanded = false
-                            onStartPipeline()
-                        }
-                    )
                     DropdownMenuItem(
                         text = { Text("导出整书数据包") },
                         leadingIcon = { Icon(Icons.Outlined.FileDownload, contentDescription = null) },

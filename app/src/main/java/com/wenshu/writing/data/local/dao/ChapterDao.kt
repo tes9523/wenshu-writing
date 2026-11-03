@@ -13,6 +13,9 @@ interface ChapterDao {
     @Query("SELECT * FROM chapters WHERE novelId = :novelId ORDER BY orderIndex ASC, id ASC")
     fun observeByNovel(novelId: Long): Flow<List<ChapterEntity>>
 
+    @Query("SELECT * FROM chapters WHERE novelId = :novelId ORDER BY orderIndex ASC, id ASC")
+    suspend fun getByNovel(novelId: Long): List<ChapterEntity>
+
     @Query("SELECT * FROM chapters WHERE id = :id")
     fun observeById(id: Long): Flow<ChapterEntity?>
 

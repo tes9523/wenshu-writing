@@ -65,11 +65,6 @@ fun AppNavHost(container: AppContainer) {
                     container = container,
                     onOpenNovel = { novelId ->
                         navController.navigate(Routes.chapterList(novelId))
-                    },
-                    onOpenPipeline = { novelId, skillId ->
-                        navController.navigate(Routes.pipeline(novelId, skillId)) {
-                            launchSingleTop = true
-                        }
                     }
                 )
             }

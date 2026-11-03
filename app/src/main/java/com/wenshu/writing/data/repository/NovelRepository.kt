@@ -35,6 +35,9 @@ class NovelRepository(
     suspend fun getChapter(chapterId: Long): Chapter? =
         chapterDao.getById(chapterId)?.toModel()
 
+    suspend fun getChapters(novelId: Long): List<Chapter> =
+        chapterDao.getByNovel(novelId).map { it.toModel() }
+
     suspend fun createNovel(title: String, description: String): Long {
         val now = System.currentTimeMillis()
         return novelDao.insert(
