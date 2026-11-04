@@ -297,9 +297,10 @@ class AiChatViewModel(
             return
         }
 
+        // 选中后回填 @技能名（带尾随空格，光标置于其后），同时激活技能并关闭面板。
         _uiState.update { current ->
             current.copy(
-                input = newInput,
+                input = "@${skill.name} ",
                 mentionQuery = null,
                 mentionResults = emptyList(),
                 skills = current.skills.map {
@@ -469,7 +470,10 @@ class AiChatViewModel(
         searchPayload: String? = null
     ) {
         val activeSkills = _uiState.value.skills.filter { it.enabled && !it.isPipeline }
-        val tools = if (activeSkills.isNotEmpty()) AgentToolExecutor.toolSpecs() else emptyList()
+        // 书稿创建隔离：只有激活的「创建新书」类技能（其 skill.md 声明使用 create_project）才允许新建书稿，
+        // 制作/调试 Skill 等场景禁止自动生成书稿条目。
+        val allowCreateProject = activeSkills.any { it.mainMarkdown.contains("create_project") }
+        val tools = if (activeSkills.isNotEmpty()) AgentToolExecutor.toolSpecs(allowCreateProject) else emptyList()
         val executor = AgentToolExecutor(
             novelRepository = novelRepository,
             settingRepository = settingRepository,
@@ -479,7 +483,8 @@ class AiChatViewModel(
             sessionIdProvider = { _uiState.value.activeSessionId },
             activeSkillsProvider = { _uiState.value.skills.filter { it.enabled && !it.isPipeline } },
             askQuestion = ::requestQuestion,
-            log = ::appendAgentLog
+            log = ::appendAgentLog,
+            allowCreateProject = allowCreateProject
         )
         val messages = mutableListOf<AgentMessage>()
         chatRepository.getMessages(sessionId).filterNot { it.isError }.forEach { message ->

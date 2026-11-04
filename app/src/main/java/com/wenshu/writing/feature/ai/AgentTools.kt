@@ -46,7 +46,9 @@ class AgentToolExecutor(
     private val sessionIdProvider: () -> Long?,
     private val activeSkillsProvider: () -> List<Skill>,
     private val askQuestion: suspend (PendingQuestion) -> String,
-    private val log: (String) -> Unit
+    private val log: (String) -> Unit,
+    /** 是否允许创建书稿。仅「创建新书」类技能开启；制作/调试 Skill 时禁止生成书稿条目。 */
+    private val allowCreateProject: Boolean = true
 ) {
 
     private val json = Json {
@@ -77,6 +79,9 @@ class AgentToolExecutor(
     }
 
     private suspend fun createProject(args: JsonObject): String {
+        if (!allowCreateProject) {
+            return "当前技能不允许创建书稿。创建书稿仅由「创建新书」类技能执行；制作或调试 Skill 不会在书稿模块生成条目。"
+        }
         val title = args.stringOf("title", "name", "book_name", "project_name")
         if (title.isBlank()) return "创建失败：缺少书名参数 title"
         val description = args.stringOf("description", "intro").ifBlank { "由 AI 技能创建" }
@@ -576,27 +581,29 @@ class AgentToolExecutor(
 
         private val ROLE_REGEX = Regex("""^[-*]\s*\*\*(身份|定位|角色)\*\*[：:]\s*(.*)$""")
 
-        /** 供 Agent 循环注入的系统提示。 */
-        fun toolSpecs(): List<AgentToolSpec> = listOf(
-            AgentToolSpec(
-                name = "create_project",
-                description = "创建一本新书稿并绑定到当前会话。写小说前若还没有书稿，必须先调用此工具。",
-                parameters = buildJsonObject {
-                    put("type", "object")
-                    putJsonObject("properties") {
-                        putJsonObject("title") {
-                            put("type", "string")
-                            put("description", "书名")
+        /** 供 Agent 循环注入的系统提示。create_project 仅在「创建新书」类技能激活时提供。 */
+        fun toolSpecs(allowCreateProject: Boolean = true): List<AgentToolSpec> = buildList {
+            if (allowCreateProject) add(
+                AgentToolSpec(
+                    name = "create_project",
+                    description = "创建一本新书稿并绑定到当前会话。写小说前若还没有书稿，必须先调用此工具。",
+                    parameters = buildJsonObject {
+                        put("type", "object")
+                        putJsonObject("properties") {
+                            putJsonObject("title") {
+                                put("type", "string")
+                                put("description", "书名")
+                            }
+                            putJsonObject("description") {
+                                put("type", "string")
+                                put("description", "一句话简介，可选")
+                            }
                         }
-                        putJsonObject("description") {
-                            put("type", "string")
-                            put("description", "一句话简介，可选")
-                        }
+                        putJsonArray("required") { add(kotlinx.serialization.json.JsonPrimitive("title")) }
                     }
-                    putJsonArray("required") { add(kotlinx.serialization.json.JsonPrimitive("title")) }
-                }
-            ),
-            AgentToolSpec(
+                )
+            )
+            add(AgentToolSpec(
                 name = "file_read",
                 description = "读取当前书稿的项目文件。path 可为 小说资料/人物库.md、小说资料/世界观.md、小说资料/章节摘要.md、章节内容/第X章.md，或目录 章节内容 / 小说资料。也可读取技能配套文件 references/xxx.md。",
                 parameters = buildJsonObject {
@@ -609,8 +616,8 @@ class AgentToolExecutor(
                     }
                     putJsonArray("required") { add(kotlinx.serialization.json.JsonPrimitive("path")) }
                 }
-            ),
-            AgentToolSpec(
+            ))
+            add(AgentToolSpec(
                 name = "file_write",
                 description = "写入当前书稿的项目文件。人物库/世界观/章节摘要会同步到设定库，章节内容/第X章.md 会创建或更新章节。",
                 parameters = buildJsonObject {
@@ -630,8 +637,8 @@ class AgentToolExecutor(
                         add(kotlinx.serialization.json.JsonPrimitive("content"))
                     }
                 }
-            ),
-            AgentToolSpec(
+            ))
+            add(AgentToolSpec(
                 name = "skill_lookup",
                 description = "按名称读取技能的完整 skill.md 正文与配套文件列表。修改技能前先用它了解现状。",
                 parameters = buildJsonObject {
@@ -644,8 +651,8 @@ class AgentToolExecutor(
                     }
                     putJsonArray("required") { add(kotlinx.serialization.json.JsonPrimitive("name")) }
                 }
-            ),
-            AgentToolSpec(
+            ))
+            add(AgentToolSpec(
                 name = "create_skill",
                 description = "创建新的自定义技能。content 为完整 skill.md（含 frontmatter），references 为 路径->内容 的对象。",
                 parameters = buildJsonObject {
@@ -674,8 +681,8 @@ class AgentToolExecutor(
                         add(kotlinx.serialization.json.JsonPrimitive("content"))
                     }
                 }
-            ),
-            AgentToolSpec(
+            ))
+            add(AgentToolSpec(
                 name = "update_skill",
                 description = "更新已有技能。内置技能被修改时会自动克隆为用户副本。",
                 parameters = buildJsonObject {
@@ -700,8 +707,8 @@ class AgentToolExecutor(
                     }
                     putJsonArray("required") { add(kotlinx.serialization.json.JsonPrimitive("skill_name")) }
                 }
-            ),
-            AgentToolSpec(
+            ))
+            add(AgentToolSpec(
                 name = "question",
                 description = "向用户发起确认或选择。任何写入文件前都必须先用它征求用户同意。",
                 parameters = buildJsonObject {
@@ -738,7 +745,7 @@ class AgentToolExecutor(
                     }
                     putJsonArray("required") { add(kotlinx.serialization.json.JsonPrimitive("questions")) }
                 }
-            )
-        )
+            ))
+        }
     }
 }

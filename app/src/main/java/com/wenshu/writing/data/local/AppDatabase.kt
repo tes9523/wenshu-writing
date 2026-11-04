@@ -42,7 +42,7 @@ import com.wenshu.writing.data.local.entity.SkillEntity
         ChapterTaskEntity::class,
         PipelineRunEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -253,6 +253,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** 1.0.9 -> 1.1.0：新增自定义外观（主题色/背景色/背景图/提示音/字体/聊天字号）配置项。 */
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `app_settings` ADD COLUMN `themeColorName` TEXT NOT NULL DEFAULT 'INK'")
+                db.execSQL("ALTER TABLE `app_settings` ADD COLUMN `backgroundColorName` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `app_settings` ADD COLUMN `backgroundImagePath` TEXT")
+                db.execSQL("ALTER TABLE `app_settings` ADD COLUMN `soundEnabled` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `app_settings` ADD COLUMN `soundType` TEXT NOT NULL DEFAULT 'notification'")
+                db.execSQL("ALTER TABLE `app_settings` ADD COLUMN `fontName` TEXT NOT NULL DEFAULT 'system'")
+                db.execSQL("ALTER TABLE `app_settings` ADD COLUMN `chatFontSize` INTEGER NOT NULL DEFAULT 14")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -269,7 +282,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_3_4,
                         MIGRATION_4_5,
                         MIGRATION_5_6,
-                        MIGRATION_6_7
+                        MIGRATION_6_7,
+                        MIGRATION_7_8
                     )
                     .build()
                     .also { instance = it }

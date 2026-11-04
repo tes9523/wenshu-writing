@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -397,7 +398,7 @@ private fun SettingCard(
     }
 }
 
-/** 设定库统一的底部抽屉表单：圆角+拖拽横条、内容可滚动、底部按钮固定。 */
+/** 设定库统一的底部抽屉表单：圆角+拖拽横条、高度为屏幕 4/5、内容可滚动、底部按钮固定。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LibraryFormSheet(
@@ -408,7 +409,7 @@ private fun LibraryFormSheet(
     confirmEnabled: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -417,6 +418,7 @@ private fun LibraryFormSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .fillMaxHeight(0.8f)
                 .imePadding()
         ) {
             Text(
@@ -426,7 +428,7 @@ private fun LibraryFormSheet(
             )
             Column(
                 modifier = Modifier
-                    .weight(1f, fill = false)
+                    .weight(1f)
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp, vertical = 8.dp)
             ) {
@@ -470,6 +472,7 @@ private fun SettingEditorDialog(
             value = title,
             onValueChange = { title = it },
             label = { Text(if (category == SettingCategories.CHARACTER) "姓名" else "标题") },
+            textStyle = MaterialTheme.typography.bodyMedium,
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -478,6 +481,7 @@ private fun SettingEditorDialog(
             value = subtitle,
             onValueChange = { subtitle = it },
             label = { Text(subtitleLabel) },
+            textStyle = MaterialTheme.typography.bodyMedium,
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -486,9 +490,10 @@ private fun SettingEditorDialog(
             value = content,
             onValueChange = { content = it },
             label = { Text("内容") },
+            textStyle = MaterialTheme.typography.bodyMedium,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(160.dp)
+                .height(280.dp)
         )
         Spacer(Modifier.height(8.dp))
     }
@@ -515,6 +520,7 @@ private fun CategoryNameDialog(
             value = name,
             onValueChange = { name = it },
             label = { Text("分类名称") },
+            textStyle = MaterialTheme.typography.bodyMedium,
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )

@@ -25,6 +25,34 @@ class SettingsViewModel(
         viewModelScope.launch { repository.setThemeMode(mode) }
     }
 
+    fun setThemeColor(name: String) {
+        viewModelScope.launch { repository.setThemeColor(name) }
+    }
+
+    fun setBackgroundColor(name: String) {
+        viewModelScope.launch { repository.setBackgroundColor(name) }
+    }
+
+    fun setBackgroundImage(path: String?) {
+        viewModelScope.launch { repository.setBackgroundImage(path) }
+    }
+
+    fun setSoundEnabled(enabled: Boolean) {
+        viewModelScope.launch { repository.setSoundEnabled(enabled) }
+    }
+
+    fun setSoundType(type: String) {
+        viewModelScope.launch { repository.setSoundType(type) }
+    }
+
+    fun setFontName(name: String) {
+        viewModelScope.launch { repository.setFontName(name) }
+    }
+
+    fun setChatFontSize(size: Int) {
+        viewModelScope.launch { repository.setChatFontSize(size) }
+    }
+
     companion object {
         fun factory(repository: PreferencesRepository): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {

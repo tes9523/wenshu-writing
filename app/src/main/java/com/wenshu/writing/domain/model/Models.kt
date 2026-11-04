@@ -112,7 +112,21 @@ data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val activeAiProfileId: Long = -1L,
     /** 当前激活书稿；-1 表示未选择，UI 会回落到「全局公共素材」。 */
-    val activeNovelId: Long = -1L
+    val activeNovelId: Long = -1L,
+    /** 主题色预设名。 */
+    val themeColorName: String = "INK",
+    /** 背景色预设名；空串表示跟随主题。 */
+    val backgroundColorName: String = "",
+    /** 全局背景图片本地路径。 */
+    val backgroundImagePath: String? = null,
+    /** AI 回复完成 / 弹出确认窗口时播放提示音。 */
+    val soundEnabled: Boolean = true,
+    /** 提示音类型：notification / ringtone / alarm。 */
+    val soundType: String = "notification",
+    /** 应用字体：system / serif / sans / mono。 */
+    val fontName: String = "system",
+    /** 聊天消息字号（sp）。 */
+    val chatFontSize: Int = 14
 )
 
 /** 灵感备忘录（纯文本）。bookId 为 null 表示全局公共备忘录。 */

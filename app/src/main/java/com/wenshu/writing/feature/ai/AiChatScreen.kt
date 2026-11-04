@@ -89,8 +89,16 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wenshu.writing.di.AppContainer
@@ -99,6 +107,7 @@ import com.wenshu.writing.domain.model.ChatRole
 import com.wenshu.writing.domain.model.ChatSession
 import com.wenshu.writing.domain.model.Novel
 import com.wenshu.writing.domain.model.Skill
+import com.wenshu.writing.ui.util.SoundPlayer
 import com.wenshu.writing.ui.util.formatShortTimestamp
 import kotlinx.coroutines.launch
 
@@ -122,6 +131,9 @@ fun AiChatScreen(
         )
     )
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val appSettings by container.preferencesRepository.settings.collectAsStateWithLifecycle(
+        initialValue = com.wenshu.writing.domain.model.AppSettings()
+    )
     val listState = rememberLazyListState()
     val snackbarHostState = remember { SnackbarHostState() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -174,6 +186,20 @@ fun AiChatScreen(
         val toast = state.toast ?: return@LaunchedEffect
         viewModel.consumeToast()
         Toast.makeText(context, toast, Toast.LENGTH_SHORT).show()
+    }
+
+    // 提示音：AI 回复完成（isSending 由 true 变 false）与弹出确认窗口时播放。
+    var wasSending by remember { mutableStateOf(false) }
+    LaunchedEffect(state.isSending) {
+        if (wasSending && !state.isSending && appSettings.soundEnabled) {
+            SoundPlayer.play(context, appSettings.soundType)
+        }
+        wasSending = state.isSending
+    }
+    LaunchedEffect(state.pendingQuestion) {
+        if (state.pendingQuestion != null && appSettings.soundEnabled) {
+            SoundPlayer.play(context, appSettings.soundType)
+        }
     }
 
     LaunchedEffect(state.activeSessionId, state.messages, state.isSending) {
@@ -387,6 +413,7 @@ fun AiChatScreen(
                                 isSending = state.isSending,
                                 canEdit = message.id == latestUserMessageId,
                                 selectionEpoch = selectionEpoch,
+                                chatFontSize = appSettings.chatFontSize,
                                 onCopy = {
                                     clipboard.setText(AnnotatedString(message.content))
                                     Toast.makeText(context, "复制成功", Toast.LENGTH_SHORT).show()
@@ -403,7 +430,8 @@ fun AiChatScreen(
                                     isSearching = state.isSearching,
                                     streamingText = state.streamingText,
                                     activeToolName = state.activeToolName,
-                                    selectionEpoch = selectionEpoch
+                                    selectionEpoch = selectionEpoch,
+                                    chatFontSize = appSettings.chatFontSize
                                 )
                             }
                         }
@@ -446,6 +474,7 @@ fun AiChatScreen(
                     isSending = state.isSending,
                     isEditing = state.editingMessageId != null,
                     webSearchEnabled = state.webSearchEnabled,
+                    skillNames = state.skills.map { it.name },
                     onInputChange = viewModel::updateInput,
                     onSend = viewModel::sendMessage,
                     onStop = viewModel::stopGeneration,
@@ -953,6 +982,7 @@ private fun MessageBubble(
     isSending: Boolean,
     canEdit: Boolean,
     selectionEpoch: Int,
+    chatFontSize: Int,
     onCopy: () -> Unit,
     onSave: () -> Unit,
     onDelete: () -> Unit,
@@ -1040,7 +1070,9 @@ private fun MessageBubble(
                     SelectionContainer {
                         Text(
                             text = message.content,
-                            style = MaterialTheme.typography.bodyMedium
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = chatFontSize.sp
+                            )
                         )
                     }
                 }
@@ -1116,7 +1148,8 @@ private fun TypingBubble(
     isSearching: Boolean,
     streamingText: String,
     activeToolName: String?,
-    selectionEpoch: Int
+    selectionEpoch: Int,
+    chatFontSize: Int
 ) {
     Row(modifier = Modifier.fillMaxWidth()) {
         Surface(
@@ -1131,7 +1164,9 @@ private fun TypingBubble(
                         SelectionContainer {
                             Text(
                                 text = streamingText,
-                                style = MaterialTheme.typography.bodyMedium
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontSize = chatFontSize.sp
+                                )
                             )
                         }
                     }
@@ -1259,18 +1294,55 @@ private fun SkillMentionPanel(
     }
 }
 
+/** 把输入框中 @技能名 高亮加粗，用来标识本次要调用的技能。 */
+private class SkillMentionTransformation(
+    private val skillNames: List<String>,
+    private val color: Color
+) : VisualTransformation {
+    private val tokenRegex = Regex("""@([\w\-\u4e00-\u9fa5]+)""")
+
+    override fun filter(text: AnnotatedString): TransformedText {
+        if (skillNames.isEmpty()) return TransformedText(text, OffsetMapping.Identity)
+        val builder = AnnotatedString.Builder(text)
+        tokenRegex.findAll(text.text).forEach { match ->
+            val name = match.groupValues.getOrNull(1) ?: return@forEach
+            if (skillNames.any { it.equals(name, ignoreCase = true) }) {
+                builder.addStyle(
+                    SpanStyle(fontWeight = FontWeight.Bold, color = color),
+                    match.range.first,
+                    match.range.last + 1
+                )
+            }
+        }
+        return TransformedText(builder.toAnnotatedString(), OffsetMapping.Identity)
+    }
+}
+
 @Composable
 private fun InputBar(
     input: String,
     isSending: Boolean,
     isEditing: Boolean,
     webSearchEnabled: Boolean,
+    skillNames: List<String>,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onCancelEdit: () -> Unit,
     onToggleSearch: (Boolean) -> Unit
 ) {
+    // TextFieldValue 版本：外部回填（@技能名、编辑消息）时把光标移到文本末尾；
+    // 用户自己输入时保持光标位置不变。
+    var fieldValue by remember { mutableStateOf(TextFieldValue(input, TextRange(input.length))) }
+    LaunchedEffect(input) {
+        if (input != fieldValue.text) {
+            fieldValue = TextFieldValue(input, TextRange(input.length))
+        }
+    }
+    val mentionColor = MaterialTheme.colorScheme.primary
+    val mentionTransformation = remember(skillNames, mentionColor) {
+        SkillMentionTransformation(skillNames, mentionColor)
+    }
     Surface(
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 2.dp
@@ -1341,8 +1413,12 @@ private fun InputBar(
                 verticalAlignment = Alignment.Bottom
             ) {
                 OutlinedTextField(
-                    value = input,
-                    onValueChange = onInputChange,
+                    value = fieldValue,
+                    onValueChange = { newValue ->
+                        fieldValue = newValue
+                        if (newValue.text != input) onInputChange(newValue.text)
+                    },
+                    visualTransformation = mentionTransformation,
                     placeholder = { Text("描述你想写的情节，或直接粘贴完整大纲…") },
                     maxLines = 4,
                     shape = RoundedCornerShape(22.dp),

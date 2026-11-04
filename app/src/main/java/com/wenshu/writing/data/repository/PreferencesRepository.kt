@@ -21,7 +21,14 @@ class PreferencesRepository(
                 ThemeMode.valueOf(entity?.themeMode ?: ThemeMode.SYSTEM.name)
             }.getOrDefault(ThemeMode.SYSTEM),
             activeAiProfileId = entity?.activeAiProfileId ?: -1L,
-            activeNovelId = entity?.activeNovelId ?: -1L
+            activeNovelId = entity?.activeNovelId ?: -1L,
+            themeColorName = entity?.themeColorName ?: "INK",
+            backgroundColorName = entity?.backgroundColorName ?: "",
+            backgroundImagePath = entity?.backgroundImagePath,
+            soundEnabled = entity?.soundEnabled ?: true,
+            soundType = entity?.soundType ?: "notification",
+            fontName = entity?.fontName ?: "system",
+            chatFontSize = entity?.chatFontSize ?: 14
         )
     }
 
@@ -33,27 +40,48 @@ class PreferencesRepository(
         entities.map { it.toModel() }
     }
 
+    /** 读取-修改-写回，保证各设置项互不覆盖。 */
+    private suspend fun update(transform: (AppSettingsEntity) -> AppSettingsEntity) {
+        val current = settingsDao.getAppSettings() ?: AppSettingsEntity()
+        settingsDao.saveAppSettings(transform(current))
+    }
+
     suspend fun setThemeMode(mode: ThemeMode) {
-        val current = settingsDao.getAppSettings()
-        settingsDao.saveAppSettings(
-            AppSettingsEntity(
-                themeMode = mode.name,
-                activeAiProfileId = current?.activeAiProfileId ?: -1L,
-                activeNovelId = current?.activeNovelId ?: -1L
-            )
-        )
+        update { it.copy(themeMode = mode.name) }
+    }
+
+    suspend fun setThemeColor(name: String) {
+        update { it.copy(themeColorName = name) }
+    }
+
+    /** 空串表示背景色跟随主题。 */
+    suspend fun setBackgroundColor(name: String) {
+        update { it.copy(backgroundColorName = name) }
+    }
+
+    suspend fun setBackgroundImage(path: String?) {
+        update { it.copy(backgroundImagePath = path) }
+    }
+
+    suspend fun setSoundEnabled(enabled: Boolean) {
+        update { it.copy(soundEnabled = enabled) }
+    }
+
+    suspend fun setSoundType(type: String) {
+        update { it.copy(soundType = type) }
+    }
+
+    suspend fun setFontName(name: String) {
+        update { it.copy(fontName = name) }
+    }
+
+    suspend fun setChatFontSize(size: Int) {
+        update { it.copy(chatFontSize = size.coerceIn(10, 22)) }
     }
 
     /** 切换当前激活书稿；-1 表示回落到全局公共素材。 */
     suspend fun setActiveNovel(novelId: Long) {
-        val current = settingsDao.getAppSettings()
-        settingsDao.saveAppSettings(
-            AppSettingsEntity(
-                themeMode = current?.themeMode ?: ThemeMode.SYSTEM.name,
-                activeAiProfileId = current?.activeAiProfileId ?: -1L,
-                activeNovelId = novelId
-            )
-        )
+        update { it.copy(activeNovelId = novelId) }
     }
 
     suspend fun saveAiConfig(config: AiConfig) {
@@ -72,13 +100,6 @@ class PreferencesRepository(
 
     /** 记录当前启用的配置集；传入 -1 表示没有启用任何配置。 */
     suspend fun setActiveAiProfile(profileId: Long) {
-        val current = settingsDao.getAppSettings()
-        settingsDao.saveAppSettings(
-            AppSettingsEntity(
-                themeMode = current?.themeMode ?: ThemeMode.SYSTEM.name,
-                activeAiProfileId = profileId,
-                activeNovelId = current?.activeNovelId ?: -1L
-            )
-        )
+        update { it.copy(activeAiProfileId = profileId) }
     }
 }
