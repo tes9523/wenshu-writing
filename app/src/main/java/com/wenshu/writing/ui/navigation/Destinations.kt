@@ -9,6 +9,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
 
 object Routes {
+    const val SPLASH = "splash"
     const val WORKS = "works"
     const val LIBRARY = "library"
     const val AI = "ai"
@@ -16,6 +17,7 @@ object Routes {
     const val SETTINGS = "settings"
 
     const val AI_PROVIDERS = "ai_providers"
+    const val APPEARANCE = "settings/appearance"
     const val SKILLS = "skills"
     const val SKILL_EDITOR = "skill_editor/{skillId}"
     const val MEMO_EDITOR = "memo_note/{noteId}"

@@ -175,6 +175,7 @@ class AiClient(
         messages: List<AgentMessage>,
         systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
         tools: List<AgentToolSpec> = emptyList(),
+        onReasoningDelta: (String) -> Unit = {},
         onTextDelta: (String) -> Unit = {}
     ): Result<AgentTurnResult> = withContext(Dispatchers.IO) {
         require(config.baseUrl.isNotBlank()) { "请先在 API 配置中填写 API 地址" }
@@ -264,9 +265,9 @@ class AiClient(
                 }
                 val source = response.body?.source() ?: throw IOException("服务未返回响应内容")
                 val result = if (isAnthropic) {
-                    parseAnthropicStream(source, onTextDelta)
+                    parseAnthropicStream(source, onReasoningDelta, onTextDelta)
                 } else {
-                    parseOpenAiStream(source, onTextDelta)
+                    parseOpenAiStream(source, onReasoningDelta, onTextDelta)
                 }
                 if (result.text.isBlank() && result.toolCalls.isEmpty()) {
                     throw IOException("模型未返回有效内容")
@@ -285,9 +286,10 @@ class AiClient(
         }
     }
 
-    /** OpenAI 兼容 SSE：聚合 delta.content 与 delta.tool_calls 分片。 */
+    /** OpenAI 兼容 SSE：聚合 delta.content 与 delta.tool_calls 分片；reasoning_content 作为思考流回调。 */
     private fun parseOpenAiStream(
         source: BufferedSource,
+        onReasoningDelta: (String) -> Unit,
         onTextDelta: (String) -> Unit
     ): AgentTurnResult {
         val text = StringBuilder()
@@ -306,6 +308,12 @@ class AiClient(
             }
             val choices = runCatching { obj["choices"]?.jsonArray }.getOrNull() ?: continue
             val delta = choices.firstOrNull()?.jsonObject?.get("delta")?.jsonObject ?: continue
+            // 思考流（如 DeepSeek/GLM 的 reasoning_content），仅用于界面展示，不计入正文。
+            val reasoningChunk = delta["reasoning_content"]?.jsonPrimitive?.contentOrNull
+                ?: delta["reasoning"]?.jsonPrimitive?.contentOrNull
+            if (!reasoningChunk.isNullOrEmpty()) {
+                onReasoningDelta(reasoningChunk)
+            }
             delta["content"]?.jsonPrimitive?.contentOrNull?.let { chunk ->
                 if (chunk.isNotEmpty()) {
                     text.append(chunk)
@@ -339,9 +347,10 @@ class AiClient(
         return AgentTurnResult(text.toString(), calls)
     }
 
-    /** Anthropic Messages SSE：text_delta 与 input_json_delta 分片。 */
+    /** Anthropic Messages SSE：text_delta 与 input_json_delta 分片；thinking_delta 作为思考流回调。 */
     private fun parseAnthropicStream(
         source: BufferedSource,
+        onReasoningDelta: (String) -> Unit,
         onTextDelta: (String) -> Unit
     ): AgentTurnResult {
         val textBlocks = sortedMapOf<Int, StringBuilder>()
@@ -377,6 +386,12 @@ class AiClient(
                                 textBlocks.getOrPut(index) { StringBuilder() }.append(chunk)
                                 onTextDelta(chunk)
                             }
+                        }
+                        "thinking_delta" -> {
+                            // 思考流：仅界面展示，不计入正文。
+                            delta["thinking"]?.jsonPrimitive?.contentOrNull
+                                ?.takeIf { it.isNotEmpty() }
+                                ?.let { onReasoningDelta(it) }
                         }
                         "input_json_delta" -> {
                             delta["partial_json"]?.jsonPrimitive?.contentOrNull

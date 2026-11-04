@@ -28,9 +28,11 @@ import com.wenshu.writing.feature.library.LibraryScreen
 import com.wenshu.writing.feature.memo.MemoEditorScreen
 import com.wenshu.writing.feature.memo.MemoScreen
 import com.wenshu.writing.feature.pipeline.PipelineScreen
+import com.wenshu.writing.feature.settings.AppearanceScreen
 import com.wenshu.writing.feature.settings.SettingsScreen
 import com.wenshu.writing.feature.skill.SkillEditorScreen
 import com.wenshu.writing.feature.skill.SkillScreen
+import com.wenshu.writing.feature.splash.SplashScreen
 import com.wenshu.writing.feature.works.ChapterListScreen
 import com.wenshu.writing.feature.works.WorksScreen
 
@@ -57,9 +59,19 @@ fun AppNavHost(container: AppContainer) {
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = Routes.WORKS,
+            startDestination = Routes.SPLASH,
             modifier = Modifier.padding(innerPadding)
         ) {
+            composable(Routes.SPLASH) {
+                SplashScreen(
+                    onFinished = {
+                        navController.navigate(Routes.WORKS) {
+                            popUpTo(Routes.SPLASH) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                )
+            }
             composable(Routes.WORKS) {
                 WorksScreen(
                     container = container,
@@ -101,7 +113,18 @@ fun AppNavHost(container: AppContainer) {
                         navController.navigate(Routes.SKILLS) {
                             launchSingleTop = true
                         }
+                    },
+                    onOpenAppearance = {
+                        navController.navigate(Routes.APPEARANCE) {
+                            launchSingleTop = true
+                        }
                     }
+                )
+            }
+            composable(Routes.APPEARANCE) {
+                AppearanceScreen(
+                    container = container,
+                    onBack = { navController.popBackStack() }
                 )
             }
             composable(Routes.MEMO) {

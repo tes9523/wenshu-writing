@@ -6,6 +6,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -407,7 +408,9 @@ private fun LibraryFormSheet(
     onConfirm: () -> Unit,
     confirmLabel: String = "保存",
     confirmEnabled: Boolean = true,
-    content: @Composable () -> Unit
+    /** true 时内容区不整体滚动，由内容自身填满剩余空间（用于大输入框向下拓展）。 */
+    fillContent: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -426,13 +429,23 @@ private fun LibraryFormSheet(
                 style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)
             )
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = 8.dp)
-            ) {
-                content()
+            if (fillContent) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 20.dp, vertical = 8.dp)
+                ) {
+                    content()
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 8.dp)
+                ) {
+                    content()
+                }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Row(
@@ -466,7 +479,8 @@ private fun SettingEditorDialog(
     LibraryFormSheet(
         title = if (initial == null) "新建$category" else "编辑$category",
         onDismiss = onDismiss,
-        onConfirm = { onSave(title, subtitle, content) }
+        onConfirm = { onSave(title, subtitle, content) },
+        fillContent = true
     ) {
         OutlinedTextField(
             value = title,
@@ -486,6 +500,7 @@ private fun SettingEditorDialog(
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(10.dp))
+        // 内容输入框向下拓展填满剩余空间，内部滚动浏览长文本。
         OutlinedTextField(
             value = content,
             onValueChange = { content = it },
@@ -493,7 +508,7 @@ private fun SettingEditorDialog(
             textStyle = MaterialTheme.typography.bodyMedium,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(280.dp)
+                .weight(1f)
         )
         Spacer(Modifier.height(8.dp))
     }

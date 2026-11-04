@@ -112,6 +112,8 @@ data class AiChatUiState(
     val pendingTitleInput: ParsedDocResult? = null,
     /** 流式生成中的实时文本。 */
     val streamingText: String = "",
+    /** 模型思考阶段的实时思考文本，仅展示用、不写入最终回复。 */
+    val streamingReasoning: String = "",
     /** 当前正在执行的本地工具名，用于气泡提示。 */
     val activeToolName: String? = null,
     /** 正在编辑的用户消息 ID；非空时输入框处于编辑态。 */
@@ -382,6 +384,7 @@ class AiChatViewModel(
                 mentionQuery = null,
                 mentionResults = emptyList(),
                 streamingText = "",
+                streamingReasoning = "",
                 activeToolName = null,
                 editingMessageId = null,
                 editingPreviousInput = "",
@@ -446,6 +449,7 @@ class AiChatViewModel(
                 isSending = false,
                 isSearching = false,
                 streamingText = "",
+                streamingReasoning = "",
                 activeToolName = null,
                 toast = "已停止生成"
             )
@@ -499,7 +503,7 @@ class AiChatViewModel(
 
         repeat(MAX_AGENT_TURNS) { turnIndex ->
             currentCoroutineContext().ensureActive()
-            _uiState.update { it.copy(streamingText = "", activeToolName = null) }
+            _uiState.update { it.copy(streamingText = "", streamingReasoning = "", activeToolName = null) }
             appendAgentLog("第 ${turnIndex + 1} 轮请求模型")
 
             // 每轮重建系统提示：create_project 绑定书稿后，后续轮次能立即拿到书稿上下文。
@@ -515,10 +519,19 @@ class AiChatViewModel(
                 config = config,
                 messages = messages,
                 systemPrompt = systemPrompt,
-                tools = tools
+                tools = tools,
+                onReasoningDelta = { delta ->
+                    _uiState.update { current ->
+                        current.copy(streamingReasoning = current.streamingReasoning + delta)
+                    }
+                }
             ) { delta ->
                 _uiState.update { current ->
-                    current.copy(streamingText = current.streamingText + delta)
+                    // 正文开始输出后清除思考文本，思考内容不进入最终回复。
+                    current.copy(
+                        streamingText = current.streamingText + delta,
+                        streamingReasoning = ""
+                    )
                 }
             }.getOrElse { error ->
                 val partial = _uiState.value.streamingText.trim()
@@ -615,6 +628,7 @@ class AiChatViewModel(
                 isSending = false,
                 isSearching = false,
                 streamingText = "",
+                streamingReasoning = "",
                 activeToolName = null,
                 pendingQuestion = null
             )
@@ -930,6 +944,7 @@ class AiChatViewModel(
                 isSending = true,
                 isSearching = false,
                 streamingText = "",
+                streamingReasoning = "",
                 activeToolName = null,
                 skillLogs = if (it.skillLogEnabled) emptyList() else it.skillLogs
             )

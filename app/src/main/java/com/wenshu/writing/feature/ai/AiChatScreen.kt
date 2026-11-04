@@ -202,10 +202,11 @@ fun AiChatScreen(
         }
     }
 
-    LaunchedEffect(state.activeSessionId, state.messages, state.isSending) {
+    LaunchedEffect(state.activeSessionId, state.messages, state.isSending, state.pendingQuestion) {
         val itemCount = state.messages.size +
             (if (state.messages.isEmpty()) 1 else 0) +
-            (if (state.isSending) 1 else 0)
+            (if (state.isSending) 1 else 0) +
+            (if (state.pendingQuestion != null) 1 else 0)
         if (itemCount == 0) return@LaunchedEffect
         val switchedSession = lastSessionId != state.activeSessionId
         lastSessionId = state.activeSessionId
@@ -414,6 +415,7 @@ fun AiChatScreen(
                                 canEdit = message.id == latestUserMessageId,
                                 selectionEpoch = selectionEpoch,
                                 chatFontSize = appSettings.chatFontSize,
+                                skillNames = state.skills.map { it.name },
                                 onCopy = {
                                     clipboard.setText(AnnotatedString(message.content))
                                     Toast.makeText(context, "复制成功", Toast.LENGTH_SHORT).show()
@@ -429,9 +431,20 @@ fun AiChatScreen(
                                 TypingBubble(
                                     isSearching = state.isSearching,
                                     streamingText = state.streamingText,
+                                    streamingReasoning = state.streamingReasoning,
                                     activeToolName = state.activeToolName,
                                     selectionEpoch = selectionEpoch,
-                                    chatFontSize = appSettings.chatFontSize
+                                    chatFontSize = appSettings.chatFontSize,
+                                    skillNames = state.skills.map { it.name }
+                                )
+                            }
+                        }
+                        // 技能待确认项：以对话气泡形式内嵌展示，看完内容再选择，不再弹遮挡弹窗。
+                        state.pendingQuestion?.let { question ->
+                            item(key = "pending_question") {
+                                PendingQuestionBubble(
+                                    question = question,
+                                    onAnswer = viewModel::answerQuestion
                                 )
                             }
                         }
@@ -672,41 +685,6 @@ fun AiChatScreen(
             },
             dismissButton = {
                 TextButton(onClick = viewModel::dismissTitleInput) { Text("取消") }
-            }
-        )
-    }
-
-    state.pendingQuestion?.let { question ->
-        AlertDialog(
-            onDismissRequest = { viewModel.answerQuestion("取消") },
-            title = { Text(question.header.ifBlank { "需要确认" }) },
-            text = {
-                Column {
-                    Text(question.question, style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.height(8.dp))
-                    question.options.forEach { option ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { viewModel.answerQuestion(option.label) }
-                                .padding(vertical = 10.dp, horizontal = 4.dp)
-                        ) {
-                            Column {
-                                Text(option.label, style = MaterialTheme.typography.titleSmall)
-                                if (option.description.isNotBlank()) {
-                                    Text(
-                                        option.description,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { viewModel.answerQuestion("取消") }) { Text("取消") }
             }
         )
     }
@@ -983,6 +961,7 @@ private fun MessageBubble(
     canEdit: Boolean,
     selectionEpoch: Int,
     chatFontSize: Int,
+    skillNames: List<String>,
     onCopy: () -> Unit,
     onSave: () -> Unit,
     onDelete: () -> Unit,
@@ -1068,8 +1047,13 @@ private fun MessageBubble(
                 // key 随空白点击变化，重新创建 SelectionContainer 以退出文本选中态。
                 key(selectionEpoch) {
                     SelectionContainer {
+                        // @技能名 使用独立高亮色+加粗，和普通文字明显区分。
+                        val mentionColor = MaterialTheme.colorScheme.primary
+                        val bodyText = remember(message.content, skillNames, mentionColor) {
+                            skillMentionAnnotatedString(message.content, skillNames, mentionColor)
+                        }
                         Text(
-                            text = message.content,
+                            text = bodyText,
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontSize = chatFontSize.sp
                             )
@@ -1143,13 +1127,11 @@ private fun MessageAction(
     }
 }
 
+/** 技能写入/修改确认气泡：在对话流内展示待变更内容与操作按钮，不遮挡聊天记录。 */
 @Composable
-private fun TypingBubble(
-    isSearching: Boolean,
-    streamingText: String,
-    activeToolName: String?,
-    selectionEpoch: Int,
-    chatFontSize: Int
+private fun PendingQuestionBubble(
+    question: PendingQuestion,
+    onAnswer: (String) -> Unit
 ) {
     Row(modifier = Modifier.fillMaxWidth()) {
         Surface(
@@ -1159,11 +1141,116 @@ private fun TypingBubble(
             modifier = Modifier.widthIn(max = 340.dp)
         ) {
             Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Outlined.AutoAwesome,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = question.header.ifBlank { "需要确认" },
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                SelectionContainer {
+                    Text(
+                        text = question.question,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                if (question.options.isEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = { onAnswer("取消") }) { Text("取消") }
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        question.options.forEachIndexed { index, option ->
+                            // 首个选项通常是「确认/保存」，用实心按钮突出；其余用描边按钮。
+                            val primary = index == 0
+                            Surface(
+                                onClick = { onAnswer(option.label) },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (primary) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant
+                                },
+                                contentColor = if (primary) {
+                                    MaterialTheme.colorScheme.onPrimary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                    Text(option.label, style = MaterialTheme.typography.titleSmall)
+                                    if (option.description.isNotBlank()) {
+                                        Text(
+                                            option.description,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (primary) {
+                                                MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f)
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TypingBubble(
+    isSearching: Boolean,
+    streamingText: String,
+    streamingReasoning: String,
+    activeToolName: String?,
+    selectionEpoch: Int,
+    chatFontSize: Int,
+    skillNames: List<String>
+) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(18.dp),
+            tonalElevation = 1.dp,
+            modifier = Modifier.widthIn(max = 340.dp)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                // 思考过程流式展示：浅色弱化字体，正文开始输出后由 ViewModel 清空，不会保存。
+                if (streamingReasoning.isNotBlank() && streamingText.isBlank()) {
+                    Text(
+                        text = streamingReasoning,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = (chatFontSize - 2).coerceAtLeast(10).sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                    Spacer(Modifier.height(6.dp))
+                }
                 if (streamingText.isNotBlank()) {
                     key(selectionEpoch) {
                         SelectionContainer {
+                            val mentionColor = MaterialTheme.colorScheme.primary
+                            val bodyText = remember(streamingText, skillNames, mentionColor) {
+                                skillMentionAnnotatedString(streamingText, skillNames, mentionColor)
+                            }
                             Text(
-                                text = streamingText,
+                                text = bodyText,
                                 style = MaterialTheme.typography.bodyMedium.copy(
                                     fontSize = chatFontSize.sp
                                 )
@@ -1172,7 +1259,9 @@ private fun TypingBubble(
                     }
                 }
                 Row(
-                    modifier = Modifier.padding(top = if (streamingText.isBlank()) 0.dp else 6.dp),
+                    modifier = Modifier.padding(
+                        top = if (streamingText.isBlank() && streamingReasoning.isBlank()) 0.dp else 6.dp
+                    ),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -1181,7 +1270,7 @@ private fun TypingBubble(
                         text = when {
                             isSearching -> "联网检索中…"
                             activeToolName != null -> "执行技能工具：$activeToolName…"
-                            streamingText.isNotBlank() -> "正在生成…"
+                            streamingText.isBlank() && streamingReasoning.isNotBlank() -> "思考中…"
                             else -> "正在生成…"
                         },
                         style = MaterialTheme.typography.bodyMedium,
@@ -1294,27 +1383,39 @@ private fun SkillMentionPanel(
     }
 }
 
+private val skillMentionRegex = Regex("""@([\w\-\u4e00-\u9fa5]+)""")
+
+/** 构建 @技能名 高亮加粗的正文，用于 AI 气泡与流式文本展示。 */
+private fun skillMentionAnnotatedString(
+    text: String,
+    skillNames: List<String>,
+    color: Color
+): AnnotatedString {
+    if (skillNames.isEmpty() || !text.contains('@')) return AnnotatedString(text)
+    val builder = AnnotatedString.Builder(text)
+    skillMentionRegex.findAll(text).forEach { match ->
+        val name = match.groupValues.getOrNull(1) ?: return@forEach
+        if (skillNames.any { it.equals(name, ignoreCase = true) }) {
+            builder.addStyle(
+                SpanStyle(fontWeight = FontWeight.Bold, color = color),
+                match.range.first,
+                match.range.last + 1
+            )
+        }
+    }
+    return builder.toAnnotatedString()
+}
+
 /** 把输入框中 @技能名 高亮加粗，用来标识本次要调用的技能。 */
 private class SkillMentionTransformation(
     private val skillNames: List<String>,
     private val color: Color
 ) : VisualTransformation {
-    private val tokenRegex = Regex("""@([\w\-\u4e00-\u9fa5]+)""")
-
     override fun filter(text: AnnotatedString): TransformedText {
-        if (skillNames.isEmpty()) return TransformedText(text, OffsetMapping.Identity)
-        val builder = AnnotatedString.Builder(text)
-        tokenRegex.findAll(text.text).forEach { match ->
-            val name = match.groupValues.getOrNull(1) ?: return@forEach
-            if (skillNames.any { it.equals(name, ignoreCase = true) }) {
-                builder.addStyle(
-                    SpanStyle(fontWeight = FontWeight.Bold, color = color),
-                    match.range.first,
-                    match.range.last + 1
-                )
-            }
-        }
-        return TransformedText(builder.toAnnotatedString(), OffsetMapping.Identity)
+        return TransformedText(
+            skillMentionAnnotatedString(text.text, skillNames, color),
+            OffsetMapping.Identity
+        )
     }
 }
 
@@ -1419,7 +1520,7 @@ private fun InputBar(
                         if (newValue.text != input) onInputChange(newValue.text)
                     },
                     visualTransformation = mentionTransformation,
-                    placeholder = { Text("描述你想写的情节，或直接粘贴完整大纲…") },
+                    placeholder = { Text("写下你的故事…") },
                     maxLines = 4,
                     shape = RoundedCornerShape(22.dp),
                     modifier = Modifier.weight(1f)
