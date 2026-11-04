@@ -208,8 +208,8 @@ class SkillRepository(
         val dirs = context.assets.list(root).orEmpty().filter { it.isNotBlank() }
         val now = System.currentTimeMillis()
         return dirs.mapIndexedNotNull { index, dir ->
-            // 兼容 SKILL.md（1.0.8 内置技能）与历史 main.md / main。
-            val main = listOf("SKILL.md", "main.md", "main")
+            // 新规范为 skill.md；继续兼容 SKILL.md 与历史 main.md / main。
+            val main = listOf("skill.md", "SKILL.md", "main.md", "main")
                 .firstNotNullOfOrNull { fileName ->
                     runCatching {
                         context.assets.open("$root/$dir/$fileName")

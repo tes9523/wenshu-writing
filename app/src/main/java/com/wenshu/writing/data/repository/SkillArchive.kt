@@ -16,13 +16,13 @@ import java.util.zip.ZipOutputStream
 class SkillImportException(message: String) : IllegalArgumentException(message)
 
 /**
- * Skill zip 包的读写规则（1.0.6 定稿）。
+ * Skill zip 包的读写规则（1.0.9 更新）。
  *
- * 读取：zip 根目录存在任意一个 main / main.md / skill.md 即可导入，无需任何配置文件。
+ * 读取：兼容 skill.md（新规范）、SKILL.md、main.md / main（旧包），无需任何配置文件。
  * 根目录主体文件视为单技能包；否则每个一级子目录视为一个技能。
  * 名称优先取一级目录名，根目录单技能则用「导入Skill_时间戳」。
  *
- * 写出：仅打包 main.md 主体 + references/ 参考素材，不写入任何 json 或冗余文件。
+ * 写出：主体文件统一为 skill.md，附 references/ 参考素材，不写入任何 json 或冗余文件。
  */
 object SkillArchive {
 
@@ -33,9 +33,9 @@ object SkillArchive {
         val references: List<SkillReference>
     )
 
-    private val MAIN_FILE_NAMES = listOf("main.md", "main", "skill.md")
-    /** 1.0.6 起导出固定使用带扩展名的 main.md。 */
-    private const val MAIN_FILE_NAME = "main.md"
+    /** 1.0.9 起主文件统一 skill.md；导入时继续兼容旧包里的 main.md / main。 */
+    private val MAIN_FILE_NAMES = listOf("skill.md", "SKILL.md", "main.md", "main")
+    private const val MAIN_FILE_NAME = "skill.md"
 
     fun readZip(input: InputStream): List<ImportedSkill> {
         val entries = LinkedHashMap<String, ByteArray>()
@@ -78,7 +78,7 @@ object SkillArchive {
             .groupBy { path -> path.substringBeforeLast('/', "") }
 
         if (mainByDir.isEmpty()) {
-            throw SkillImportException("未识别到Skill主体文件（main / main.md / skill.md）")
+            throw SkillImportException("未识别到Skill主体文件（skill.md / main.md）")
         }
 
         // 根目录主体文件优先，视为单技能包；否则只取一级子目录，避免嵌套包错乱。
@@ -88,12 +88,12 @@ object SkillArchive {
             mainByDir.keys.filter { it.isNotBlank() && !it.contains('/') }.sorted()
         }
         if (roots.isEmpty()) {
-            throw SkillImportException("未识别到Skill主体文件（main / main.md / skill.md）")
+            throw SkillImportException("未识别到Skill主体文件（skill.md / main.md）")
         }
 
         return roots.mapIndexed { index, root ->
             val mainPath = pickMainPath(mainByDir[root].orEmpty())
-                ?: throw SkillImportException("未识别到Skill主体文件（main / main.md / skill.md）")
+                ?: throw SkillImportException("未识别到Skill主体文件（skill.md / main.md）")
             val main = readText(entries.getValue(mainPath))
             val folderName = root.substringAfterLast('/')
             // 名称：一级目录名优先；根目录单技能用时间戳兜底。

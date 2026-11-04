@@ -764,7 +764,7 @@ private fun SkillDetailSheet(
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "主提示词（main.md）",
+                    text = "主提示词（skill.md）",
                     style = MaterialTheme.typography.titleSmall
                 )
                 Spacer(Modifier.height(8.dp))

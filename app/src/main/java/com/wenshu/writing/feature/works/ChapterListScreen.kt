@@ -1,5 +1,7 @@
 package com.wenshu.writing.feature.works
 
+import android.graphics.Bitmap
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,9 +41,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -49,9 +53,14 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wenshu.writing.di.AppContainer
 import com.wenshu.writing.domain.model.Chapter
 import com.wenshu.writing.ui.components.ConfirmDeleteDialog
+import com.wenshu.writing.ui.components.CoverFiles
+import com.wenshu.writing.ui.components.CoverPreviewDialog
 import com.wenshu.writing.ui.components.EmptyState
+import com.wenshu.writing.ui.components.NovelCover
+import com.wenshu.writing.ui.components.rememberCoverPicker
 import com.wenshu.writing.ui.util.formatShortTimestamp
 import com.wenshu.writing.ui.util.formatWordCount
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -68,21 +77,64 @@ fun ChapterListScreen(
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var chapterToDelete by remember { mutableStateOf<Chapter?>(null) }
+    var menuExpanded by remember { mutableStateOf(false) }
+    var coverPreviewBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val pickCover = rememberCoverPicker { bitmap -> coverPreviewBitmap = bitmap }
     val totalWords = state.chapters.sumOf { it.wordCount }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = state.novel?.title ?: "章节列表",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        state.novel?.let { novel ->
+                            NovelCover(
+                                novel = novel,
+                                modifier = Modifier.size(width = 28.dp, height = 38.dp)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                        }
+                        Text(
+                            text = state.novel?.title ?: "章节列表",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    Box {
+                        IconButton(onClick = { menuExpanded = true }) {
+                            Icon(Icons.Outlined.MoreVert, contentDescription = "更多操作")
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("更换封面") },
+                                onClick = {
+                                    menuExpanded = false
+                                    pickCover()
+                                }
+                            )
+                            if (state.novel?.coverPath != null) {
+                                DropdownMenuItem(
+                                    text = { Text("恢复默认封面") },
+                                    onClick = {
+                                        menuExpanded = false
+                                        CoverFiles.delete(state.novel?.coverPath)
+                                        viewModel.setCover(null)
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             )
@@ -160,6 +212,25 @@ fun ChapterListScreen(
                 chapterToDelete = null
             },
             onDismiss = { chapterToDelete = null }
+        )
+    }
+
+    coverPreviewBitmap?.let { bitmap ->
+        CoverPreviewDialog(
+            bitmap = bitmap,
+            onDismiss = { coverPreviewBitmap = null },
+            onConfirm = {
+                coverPreviewBitmap = null
+                scope.launch {
+                    val path = CoverFiles.save(context, novelId, bitmap)
+                    if (path == null) {
+                        Toast.makeText(context, "封面保存失败", Toast.LENGTH_SHORT).show()
+                    } else {
+                        viewModel.setCover(path)
+                        Toast.makeText(context, "封面已更新", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
         )
     }
 }

@@ -1,5 +1,6 @@
 package com.wenshu.writing.feature.works
 
+import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -45,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,9 +59,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wenshu.writing.di.AppContainer
 import com.wenshu.writing.domain.model.Novel
 import com.wenshu.writing.ui.components.ConfirmDeleteDialog
+import com.wenshu.writing.ui.components.CoverFiles
+import com.wenshu.writing.ui.components.CoverPreviewDialog
 import com.wenshu.writing.ui.components.EmptyState
-import com.wenshu.writing.ui.components.InitialCover
+import com.wenshu.writing.ui.components.NovelCover
+import com.wenshu.writing.ui.components.rememberCoverPicker
 import com.wenshu.writing.ui.util.formatShortTimestamp
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,6 +87,10 @@ fun WorksScreen(
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var novelToDelete by remember { mutableStateOf<Novel?>(null) }
     var pendingExportNovel by remember { mutableStateOf<Novel?>(null) }
+    var coverTargetNovelId by remember { mutableStateOf<Long?>(null) }
+    var coverPreviewBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    val scope = rememberCoroutineScope()
+    val pickCover = rememberCoverPicker { bitmap -> coverPreviewBitmap = bitmap }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/zip")
@@ -186,6 +196,14 @@ fun WorksScreen(
                             pendingExportNovel = novel
                             exportLauncher.launch(safeFileName(novel.title) + ".zip")
                         },
+                        onChangeCover = {
+                            coverTargetNovelId = novel.id
+                            pickCover()
+                        },
+                        onRemoveCover = {
+                            CoverFiles.delete(novel.coverPath)
+                            viewModel.setCover(novel.id, null)
+                        },
                         onDelete = { novelToDelete = novel }
                     )
                 }
@@ -216,6 +234,32 @@ fun WorksScreen(
             onDismiss = { novelToDelete = null }
         )
     }
+
+    coverPreviewBitmap?.let { bitmap ->
+        CoverPreviewDialog(
+            bitmap = bitmap,
+            onDismiss = {
+                coverPreviewBitmap = null
+                coverTargetNovelId = null
+            },
+            onConfirm = {
+                val novelId = coverTargetNovelId
+                coverPreviewBitmap = null
+                coverTargetNovelId = null
+                if (novelId != null) {
+                    scope.launch {
+                        val path = CoverFiles.save(context, novelId, bitmap)
+                        if (path == null) {
+                            Toast.makeText(context, "封面保存失败", Toast.LENGTH_SHORT).show()
+                        } else {
+                            viewModel.setCover(novelId, path)
+                            Toast.makeText(context, "封面已更新", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+        )
+    }
 }
 
 private fun safeFileName(name: String): String {
@@ -228,6 +272,8 @@ private fun NovelCard(
     novel: Novel,
     onClick: () -> Unit,
     onExport: () -> Unit,
+    onChangeCover: () -> Unit,
+    onRemoveCover: () -> Unit,
     onDelete: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -243,8 +289,8 @@ private fun NovelCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            InitialCover(
-                text = novel.title,
+            NovelCover(
+                novel = novel,
                 modifier = Modifier.size(width = 48.dp, height = 64.dp)
             )
             Spacer(Modifier.width(14.dp))
@@ -284,6 +330,22 @@ private fun NovelCard(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false }
                 ) {
+                    DropdownMenuItem(
+                        text = { Text("更换封面") },
+                        onClick = {
+                            menuExpanded = false
+                            onChangeCover()
+                        }
+                    )
+                    if (novel.coverPath != null) {
+                        DropdownMenuItem(
+                            text = { Text("恢复默认封面") },
+                            onClick = {
+                                menuExpanded = false
+                                onRemoveCover()
+                            }
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("导出整书数据包") },
                         leadingIcon = { Icon(Icons.Outlined.FileDownload, contentDescription = null) },

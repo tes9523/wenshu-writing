@@ -54,6 +54,11 @@ class WorksViewModel(
         viewModelScope.launch { repository.deleteNovel(novelId) }
     }
 
+    /** 保存或清除书稿自定义封面（null 表示恢复默认封面）。 */
+    fun setCover(novelId: Long, coverPath: String?) {
+        viewModelScope.launch { repository.setCover(novelId, coverPath) }
+    }
+
     /** 进入书稿时切换激活书稿，保证设定库/备忘录按本书隔离。 */
     fun openNovel(novelId: Long, onOpen: () -> Unit) {
         viewModelScope.launch {
@@ -168,6 +173,11 @@ class ChapterListViewModel(
 
     fun deleteChapter(chapterId: Long) {
         viewModelScope.launch { repository.deleteChapter(chapterId) }
+    }
+
+    /** 保存或清除本书封面（null 表示恢复默认封面）。 */
+    fun setCover(coverPath: String?) {
+        viewModelScope.launch { repository.setCover(novelId, coverPath) }
     }
 
     companion object {

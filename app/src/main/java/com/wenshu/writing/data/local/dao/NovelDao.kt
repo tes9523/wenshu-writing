@@ -27,6 +27,9 @@ interface NovelDao {
     @Query("UPDATE novels SET updatedAt = :updatedAt WHERE id = :id")
     suspend fun touch(id: Long, updatedAt: Long)
 
+    @Query("UPDATE novels SET coverPath = :coverPath WHERE id = :id")
+    suspend fun updateCover(id: Long, coverPath: String?)
+
     @Query("DELETE FROM novels WHERE id = :id")
     suspend fun deleteById(id: Long)
 }

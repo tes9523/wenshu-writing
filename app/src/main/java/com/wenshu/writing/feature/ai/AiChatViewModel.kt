@@ -249,6 +249,12 @@ class AiChatViewModel(
     /** 进入编辑态：把用户消息原文回填输入框，并记住进入前的输入内容。 */
     fun startEditingMessage(message: ChatMessage) {
         if (message.role != ChatRole.USER) return
+        // 仅允许修改当前会话中用户最新发出的一条消息，历史消息禁止编辑。
+        val latestUser = _uiState.value.messages.lastOrNull { it.role == ChatRole.USER }
+        if (latestUser == null || latestUser.id != message.id) {
+            _uiState.update { it.copy(toast = "仅可修改当前会话中最新一条消息") }
+            return
+        }
         _uiState.update {
             it.copy(
                 editingMessageId = message.id,

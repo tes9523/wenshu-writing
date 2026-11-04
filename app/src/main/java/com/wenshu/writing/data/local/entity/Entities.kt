@@ -12,7 +12,9 @@ data class NovelEntity(
     val title: String,
     val description: String = "",
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** 自定义封面的本地文件路径；为 null 时展示默认封面。 */
+    val coverPath: String? = null
 )
 
 @Entity(

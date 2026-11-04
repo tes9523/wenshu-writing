@@ -42,7 +42,7 @@ import com.wenshu.writing.data.local.entity.SkillEntity
         ChapterTaskEntity::class,
         PipelineRunEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -246,6 +246,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** 1.0.6 -> 1.0.9：书稿新增自定义封面路径，既有书稿不受影响（默认封面）。 */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `novels` ADD COLUMN `coverPath` TEXT")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -256,7 +263,14 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     DATABASE_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        MIGRATION_2_3,
+                        MIGRATION_3_4,
+                        MIGRATION_4_5,
+                        MIGRATION_5_6,
+                        MIGRATION_6_7
+                    )
                     .build()
                     .also { instance = it }
             }

@@ -54,6 +54,11 @@ class NovelRepository(
         novelDao.deleteById(novelId)
     }
 
+    /** 设置或清除书稿自定义封面；传 null 恢复默认封面。 */
+    suspend fun setCover(novelId: Long, coverPath: String?) {
+        novelDao.updateCover(novelId, coverPath)
+    }
+
     suspend fun createChapter(novelId: Long, title: String): Long {
         val now = System.currentTimeMillis()
         val orderIndex = chapterDao.maxOrderIndex(novelId) + 1

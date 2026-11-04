@@ -34,7 +34,7 @@ data class PendingQuestion(
 )
 
 /**
- * 1.0.8 本地工具集：把 novel-writer / skill-creator 需要的工具映射到 App 内的书稿、设定、章节与技能数据。
+ * 本地工具集：把 novel-writer / skill-creator 需要的工具映射到 App 内的书稿、设定、章节与技能数据。
  * 所有文件路径都是"项目虚拟文件"，例如 小说资料/人物库.md、章节内容/第1章.md。
  */
 class AgentToolExecutor(
@@ -96,9 +96,10 @@ class AgentToolExecutor(
         if (rawPath.isBlank()) return "读取失败：缺少 path 参数"
         val path = normalizePath(rawPath)
 
-        // 技能配套资源：references/xxx.md
-        if (path.contains("references/") || path.endsWith("SKILL.md")) {
-            val fileName = path.substringAfterLast('/')
+        // 技能配套资源：references/xxx.md；主文件兼容 skill.md / SKILL.md / main.md / main。
+        val fileName = path.substringAfterLast('/')
+        val isMainFile = fileName.lowercase() in setOf("skill.md", "main.md", "main")
+        if (path.contains("references/") || isMainFile) {
             val skills = activeSkillsProvider()
             // 优先在最近一次 skill_lookup 的技能里查找，避免同名 templates.md 串台。
             val ordered = lastSkillName?.let { name ->
@@ -106,7 +107,7 @@ class AgentToolExecutor(
                 preferred + skills.filterNot { it.name == name }
             } ?: skills
             ordered.forEach { skill ->
-                if (path.endsWith("SKILL.md", ignoreCase = true)) {
+                if (isMainFile) {
                     return buildString {
                         appendLine("# 技能：${skill.name}")
                         appendLine(stripFrontMatter(skill.mainMarkdown))
@@ -199,7 +200,7 @@ class AgentToolExecutor(
         if (name.isBlank()) return "创建失败：缺少 name 参数"
         val description = args.stringOf("description", "desc")
         val content = args.stringOf("content", "body", "main")
-        if (content.isBlank()) return "创建失败：缺少 content 参数（完整 SKILL.md 内容）"
+        if (content.isBlank()) return "创建失败：缺少 content 参数（完整 skill.md 内容）"
         val references = parseReferences(args["references"])
         val id = skillRepository.create(
             name = name,
@@ -632,7 +633,7 @@ class AgentToolExecutor(
             ),
             AgentToolSpec(
                 name = "skill_lookup",
-                description = "按名称读取技能的完整 SKILL.md 正文与配套文件列表。修改技能前先用它了解现状。",
+                description = "按名称读取技能的完整 skill.md 正文与配套文件列表。修改技能前先用它了解现状。",
                 parameters = buildJsonObject {
                     put("type", "object")
                     putJsonObject("properties") {
@@ -646,7 +647,7 @@ class AgentToolExecutor(
             ),
             AgentToolSpec(
                 name = "create_skill",
-                description = "创建新的自定义技能。content 为完整 SKILL.md（含 frontmatter），references 为 路径->内容 的对象。",
+                description = "创建新的自定义技能。content 为完整 skill.md（含 frontmatter），references 为 路径->内容 的对象。",
                 parameters = buildJsonObject {
                     put("type", "object")
                     putJsonObject("properties") {
@@ -660,7 +661,7 @@ class AgentToolExecutor(
                         }
                         putJsonObject("content") {
                             put("type", "string")
-                            put("description", "完整 SKILL.md 内容，以 --- 开头")
+                            put("description", "完整 skill.md 内容，以 --- 开头")
                         }
                         putJsonObject("references") {
                             put("type", "object")
@@ -686,7 +687,7 @@ class AgentToolExecutor(
                         }
                         putJsonObject("content") {
                             put("type", "string")
-                            put("description", "新的完整 SKILL.md，可选")
+                            put("description", "新的完整 skill.md，可选")
                         }
                         putJsonObject("reference_name") {
                             put("type", "string")

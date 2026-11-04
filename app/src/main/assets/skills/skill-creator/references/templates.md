@@ -1,4 +1,4 @@
-# SKILL.md 模板参考
+# skill.md 模板参考
 
 ## 基础模板
 
@@ -54,17 +54,18 @@ description: 代码审查助手。当用户要求审查代码、检查PR、revie
 逐文件检查，对照审查标准标记问题。
 
 ### Step 4: 生成报告
-使用 `assets/review-report.md` 模板格式，生成审查报告。
+读取 `references/报告模板.md`，按其中的格式生成审查报告。
 
 ## References
 - **[references/审查规则.md](references/审查规则.md)** — 代码审查标准，开始审查前必须读取
-- **[assets/review-report.md](assets/review-report.md)** — 审查报告输出模板
+- **[references/报告模板.md](references/报告模板.md)** — 审查报告输出模板，生成报告前读取
 ```
 
 ## 关键原则
 
-1. **渐进式加载**：元数据 → SKILL.md 正文 → 配套资源，不让上下文一次膨胀
-2. **配套资源不自动内联**：每个 references/ 文件的使用时机必须在 SKILL.md 中明确写出
-3. **末尾加 References 索引**：让 AI 一眼看到有哪些配套文件可用
-4. **解释为什么**：告诉 AI 原因，比命令式 MUST/ALWAYS 更有效
-5. **名称不用中文**：避免路径编码问题，用英文小写 + 连字符
+1. **渐进式加载**：元数据 → skill.md 正文 → 配套资源，不让上下文一次膨胀
+2. **配套资源不自动内联**：每个 references/ 文件的使用时机必须在 skill.md 中明确写出
+3. **只用 references/**：本 App 不执行 scripts/，也不加载 assets/，模板与规则一律放 `references/*.md`
+4. **末尾加 References 索引**：让 AI 一眼看到有哪些配套文件可用
+5. **解释为什么**：告诉 AI 原因，比命令式 MUST/ALWAYS 更有效
+6. **名称不用中文**：避免路径编码问题，用英文小写 + 连字符

@@ -6,7 +6,9 @@ data class Novel(
     val title: String,
     val description: String = "",
     val createdAt: Long = 0L,
-    val updatedAt: Long = 0L
+    val updatedAt: Long = 0L,
+    /** 自定义封面图片的本地绝对路径；null 表示使用默认封面。 */
+    val coverPath: String? = null
 )
 
 /** 章节 */

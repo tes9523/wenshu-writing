@@ -1,12 +1,12 @@
 package com.wenshu.writing.feature.ai
 
 import android.widget.Toast
-import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +40,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.SmartToy
@@ -75,12 +76,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -132,14 +135,22 @@ fun AiChatScreen(
     var sessionToDelete by remember { mutableStateOf<ChatSession?>(null) }
     var showBindBookDialog by remember { mutableStateOf(false) }
     var showLogDialog by remember { mutableStateOf(false) }
+    /** 点击页面空白时递增，用于清空文本选中状态。 */
+    var selectionEpoch by remember { mutableStateOf(0) }
+    /** 上一次呈现的会话，用于切换会话时强制定位到最新消息。 */
+    var lastSessionId by remember { mutableStateOf<Long?>(null) }
 
-    /** 对话视口是否已在最底部，用于控制「一键到底」浮动按钮。 */
+    /** 对话视口是否已滚动到最底部，用于控制「一键到底」浮动按钮。 */
     val isAtBottom by remember(listState) {
-        derivedStateOf {
-            val layout = listState.layoutInfo
-            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
-            layout.totalItemsCount == 0 || lastVisible >= layout.totalItemsCount - 1
-        }
+        derivedStateOf { !listState.canScrollForward }
+    }
+
+    /** 精确滚动到列表最底部：最后一条消息可能高于可视区，需要额外补一屏。 */
+    suspend fun scrollToLatest() {
+        val count = listState.layoutInfo.totalItemsCount
+        if (count <= 0) return
+        listState.scrollToItem(count - 1)
+        listState.scrollBy(100_000f)
     }
 
     LaunchedEffect(state.pipelineSkill) {
@@ -165,16 +176,21 @@ fun AiChatScreen(
         Toast.makeText(context, toast, Toast.LENGTH_SHORT).show()
     }
 
-    LaunchedEffect(state.messages.size, state.isSending) {
+    LaunchedEffect(state.activeSessionId, state.messages, state.isSending) {
         val itemCount = state.messages.size +
             (if (state.messages.isEmpty()) 1 else 0) +
             (if (state.isSending) 1 else 0)
-        if (itemCount > 0 && isAtBottom) {
-            listState.animateScrollToItem(itemCount - 1)
+        if (itemCount == 0) return@LaunchedEffect
+        val switchedSession = lastSessionId != state.activeSessionId
+        lastSessionId = state.activeSessionId
+        // 切换会话时直接定位最新消息；停留在底部时才跟随新消息，避免打断向上翻阅历史。
+        if (switchedSession || isAtBottom) {
+            scrollToLatest()
         }
     }
 
     val activeSession = state.sessions.firstOrNull { it.id == state.activeSessionId }
+    val latestUserMessageId = state.messages.lastOrNull { it.role == ChatRole.USER }?.id
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -337,7 +353,18 @@ fun AiChatScreen(
                     .padding(innerPadding)
                     .imePadding()
                     .pointerInput(Unit) {
-                        detectTapGestures(onTap = { keyboardController?.hide() })
+                        // 只处理"未被控件消费"的空白点击：收起输入法并退出文本选中态。
+                        awaitEachGesture {
+                            val down = awaitFirstDown(
+                                requireUnconsumed = false,
+                                pass = PointerEventPass.Initial
+                            )
+                            val up = waitForUpOrCancellation()
+                            if (up != null && !down.isConsumed) {
+                                keyboardController?.hide()
+                                selectionEpoch++
+                            }
+                        }
                     }
             ) {
                 Box(
@@ -358,6 +385,8 @@ fun AiChatScreen(
                             MessageBubble(
                                 message = message,
                                 isSending = state.isSending,
+                                canEdit = message.id == latestUserMessageId,
+                                selectionEpoch = selectionEpoch,
                                 onCopy = {
                                     clipboard.setText(AnnotatedString(message.content))
                                     Toast.makeText(context, "复制成功", Toast.LENGTH_SHORT).show()
@@ -373,7 +402,8 @@ fun AiChatScreen(
                                 TypingBubble(
                                     isSearching = state.isSearching,
                                     streamingText = state.streamingText,
-                                    activeToolName = state.activeToolName
+                                    activeToolName = state.activeToolName,
+                                    selectionEpoch = selectionEpoch
                                 )
                             }
                         }
@@ -381,12 +411,7 @@ fun AiChatScreen(
 
                     if (!isAtBottom) {
                         Surface(
-                            onClick = {
-                                scope.launch {
-                                    val itemCount = listState.layoutInfo.totalItemsCount
-                                    if (itemCount > 0) listState.animateScrollToItem(itemCount - 1)
-                                }
-                            },
+                            onClick = { scope.launch { scrollToLatest() } },
                             shape = CircleShape,
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             tonalElevation = 3.dp,
@@ -922,11 +947,12 @@ private fun GreetingBubble() {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     message: ChatMessage,
     isSending: Boolean,
+    canEdit: Boolean,
+    selectionEpoch: Int,
     onCopy: () -> Unit,
     onSave: () -> Unit,
     onDelete: () -> Unit,
@@ -938,125 +964,124 @@ private fun MessageBubble(
 
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Top
     ) {
-        Box {
-            Surface(
-                color = when {
-                    message.isError -> MaterialTheme.colorScheme.errorContainer
-                    isUser -> MaterialTheme.colorScheme.primaryContainer
-                    else -> MaterialTheme.colorScheme.surface
-                },
-                contentColor = when {
-                    message.isError -> MaterialTheme.colorScheme.onErrorContainer
-                    isUser -> MaterialTheme.colorScheme.onPrimaryContainer
-                    else -> MaterialTheme.colorScheme.onSurface
-                },
-                shape = RoundedCornerShape(
-                    topStart = 18.dp,
-                    topEnd = 18.dp,
-                    bottomStart = if (isUser) 18.dp else 6.dp,
-                    bottomEnd = if (isUser) 6.dp else 18.dp
-                ),
-                tonalElevation = if (isUser) 0.dp else 1.dp,
-                modifier = Modifier
-                    .widthIn(max = 340.dp)
-                    .then(
-                        if (isUser) {
-                            Modifier.combinedClickable(
-                                onClick = {},
-                                onLongClick = { menuExpanded = true }
-                            )
-                        } else {
-                            Modifier
+        if (isUser) {
+            // 用户气泡支持长按选段复制，操作菜单改由气泡左侧的更多按钮唤出，避免手势冲突。
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        Icons.Outlined.MoreVert,
+                        contentDescription = "消息操作",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("复制") },
+                        onClick = {
+                            menuExpanded = false
+                            onCopy()
                         }
                     )
+                    // 仅当前会话最新一条用户消息允许修改，历史消息隐藏该入口。
+                    if (canEdit) {
+                        DropdownMenuItem(
+                            text = { Text("修改") },
+                            onClick = {
+                                menuExpanded = false
+                                onEdit()
+                            }
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("删除") },
+                        onClick = {
+                            menuExpanded = false
+                            onDelete()
+                        }
+                    )
+                }
+            }
+        }
+        Surface(
+            color = when {
+                message.isError -> MaterialTheme.colorScheme.errorContainer
+                isUser -> MaterialTheme.colorScheme.primaryContainer
+                else -> MaterialTheme.colorScheme.surface
+            },
+            contentColor = when {
+                message.isError -> MaterialTheme.colorScheme.onErrorContainer
+                isUser -> MaterialTheme.colorScheme.onPrimaryContainer
+                else -> MaterialTheme.colorScheme.onSurface
+            },
+            shape = RoundedCornerShape(
+                topStart = 18.dp,
+                topEnd = 18.dp,
+                bottomStart = if (isUser) 18.dp else 6.dp,
+                bottomEnd = if (isUser) 6.dp else 18.dp
+            ),
+            tonalElevation = if (isUser) 0.dp else 1.dp,
+            modifier = Modifier.widthIn(max = 340.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
-                Column(
-                    modifier = Modifier
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
-                        .animateContentSize()
-                ) {
-                    if (isUser) {
-                        // 用户气泡不使用 SelectionContainer，避免长按被文本选择拦截。
+                // key 随空白点击变化，重新创建 SelectionContainer 以退出文本选中态。
+                key(selectionEpoch) {
+                    SelectionContainer {
                         Text(
                             text = message.content,
                             style = MaterialTheme.typography.bodyMedium
                         )
-                    } else {
-                        SelectionContainer {
-                            Text(
-                                text = message.content,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
                     }
-                    if (message.isError) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
+                }
+                if (message.isError) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(
+                            onClick = onRegenerate,
+                            enabled = !isSending
                         ) {
-                            TextButton(
-                                onClick = onRegenerate,
-                                enabled = !isSending
-                            ) {
-                                Icon(
-                                    Icons.Outlined.Refresh,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text("重新生成")
-                            }
-                        }
-                    }
-                    if (!isUser && !message.isError) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(top = 6.dp),
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            MessageAction(Icons.Outlined.ContentCopy, onClick = onCopy)
-                            MessageAction(Icons.Outlined.Save, onClick = onSave)
-                            MessageAction(Icons.Outlined.DeleteOutline, onClick = onDelete)
-                            MessageAction(
+                            Icon(
                                 Icons.Outlined.Refresh,
-                                enabled = !isSending,
-                                onClick = onRegenerate
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
                             )
+                            Spacer(Modifier.width(4.dp))
+                            Text("重新生成")
                         }
                     }
                 }
-            }
-
-            DropdownMenu(
-                expanded = menuExpanded,
-                onDismissRequest = { menuExpanded = false }
-            ) {
-                DropdownMenuItem(
-                    text = { Text("复制") },
-                    onClick = {
-                        menuExpanded = false
-                        onCopy()
+                if (!isUser && !message.isError) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(top = 6.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        MessageAction(Icons.Outlined.ContentCopy, onClick = onCopy)
+                        MessageAction(Icons.Outlined.Save, onClick = onSave)
+                        MessageAction(Icons.Outlined.DeleteOutline, onClick = onDelete)
+                        MessageAction(
+                            Icons.Outlined.Refresh,
+                            enabled = !isSending,
+                            onClick = onRegenerate
+                        )
                     }
-                )
-                DropdownMenuItem(
-                    text = { Text("修改") },
-                    onClick = {
-                        menuExpanded = false
-                        onEdit()
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text("删除") },
-                    onClick = {
-                        menuExpanded = false
-                        onDelete()
-                    }
-                )
+                }
             }
         }
     }
@@ -1071,7 +1096,7 @@ private fun MessageAction(
     IconButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.size(32.dp)
+        modifier = Modifier.size(36.dp)
     ) {
         Icon(
             icon,
@@ -1090,7 +1115,8 @@ private fun MessageAction(
 private fun TypingBubble(
     isSearching: Boolean,
     streamingText: String,
-    activeToolName: String?
+    activeToolName: String?,
+    selectionEpoch: Int
 ) {
     Row(modifier = Modifier.fillMaxWidth()) {
         Surface(
@@ -1101,11 +1127,13 @@ private fun TypingBubble(
         ) {
             Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                 if (streamingText.isNotBlank()) {
-                    SelectionContainer {
-                        Text(
-                            text = streamingText,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                    key(selectionEpoch) {
+                        SelectionContainer {
+                            Text(
+                                text = streamingText,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                     }
                 }
                 Row(

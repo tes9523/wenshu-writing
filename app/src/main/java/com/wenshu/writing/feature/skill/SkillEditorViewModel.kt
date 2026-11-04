@@ -145,7 +145,7 @@ class SkillEditorViewModel(
             return
         }
         if (state.mainMarkdown.isBlank()) {
-            _uiState.update { it.copy(message = "请填写主提示词（main.md）") }
+            _uiState.update { it.copy(message = "请填写主提示词（skill.md）") }
             return
         }
         _uiState.update { it.copy(showSaveConfirm = true) }

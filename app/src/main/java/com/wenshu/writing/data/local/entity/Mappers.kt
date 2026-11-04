@@ -24,7 +24,8 @@ fun NovelEntity.toModel() = Novel(
     title = title,
     description = description,
     createdAt = createdAt,
-    updatedAt = updatedAt
+    updatedAt = updatedAt,
+    coverPath = coverPath
 )
 
 fun ChapterEntity.toModel() = Chapter(

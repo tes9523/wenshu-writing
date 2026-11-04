@@ -1,6 +1,8 @@
 package com.wenshu.writing.feature.library
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -25,7 +28,8 @@ import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -36,15 +40,18 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -390,6 +397,58 @@ private fun SettingCard(
     }
 }
 
+/** 设定库统一的底部抽屉表单：圆角+拖拽横条、内容可滚动、底部按钮固定。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LibraryFormSheet(
+    title: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+    confirmLabel: String = "保存",
+    confirmEnabled: Boolean = true,
+    content: @Composable () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        dragHandle = { BottomSheetDefaults.DragHandle() }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .imePadding()
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+            ) {
+                content()
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = onDismiss) { Text("取消") }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = onConfirm, enabled = confirmEnabled) { Text(confirmLabel) }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingEditorDialog(
     category: String,
@@ -398,54 +457,44 @@ private fun SettingEditorDialog(
     onSave: (title: String, subtitle: String, content: String) -> Unit
 ) {
     var title by remember(initial) { mutableStateOf(initial?.title ?: "") }
-    var subtitle by remember(initial) {
-        mutableStateOf(
-            if (category == SettingCategories.CHARACTER) initial?.subtitle.orEmpty() else initial?.subtitle.orEmpty()
-        )
-    }
+    var subtitle by remember(initial) { mutableStateOf(initial?.subtitle.orEmpty()) }
     var content by remember(initial) { mutableStateOf(initial?.content ?: "") }
     val subtitleLabel = if (category == SettingCategories.CHARACTER) "身份/定位（选填）" else "副标题（选填）"
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "新建$category" else "编辑$category") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text(if (category == SettingCategories.CHARACTER) "姓名" else "标题") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = subtitle,
-                    onValueChange = { subtitle = it },
-                    label = { Text(subtitleLabel) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = content,
-                    onValueChange = { content = it },
-                    label = { Text("内容") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(160.dp)
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onSave(title, subtitle, content) }) { Text("保存") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        }
-    )
+    LibraryFormSheet(
+        title = if (initial == null) "新建$category" else "编辑$category",
+        onDismiss = onDismiss,
+        onConfirm = { onSave(title, subtitle, content) }
+    ) {
+        OutlinedTextField(
+            value = title,
+            onValueChange = { title = it },
+            label = { Text(if (category == SettingCategories.CHARACTER) "姓名" else "标题") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = subtitle,
+            onValueChange = { subtitle = it },
+            label = { Text(subtitleLabel) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = content,
+            onValueChange = { content = it },
+            label = { Text("内容") },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(160.dp)
+        )
+        Spacer(Modifier.height(8.dp))
+    }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CategoryNameDialog(
     title: String,
@@ -455,25 +504,20 @@ private fun CategoryNameDialog(
     onDismiss: () -> Unit
 ) {
     var name by remember { mutableStateOf(initial) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it },
-                label = { Text("分类名称") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { if (name.isNotBlank()) onConfirm(name) }
-            ) { Text(confirmLabel) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        }
-    )
+    LibraryFormSheet(
+        title = title,
+        onDismiss = onDismiss,
+        confirmLabel = confirmLabel,
+        confirmEnabled = name.isNotBlank(),
+        onConfirm = { if (name.isNotBlank()) onConfirm(name) }
+    ) {
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text("分类名称") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(8.dp))
+    }
 }
