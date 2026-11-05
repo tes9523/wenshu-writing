@@ -20,8 +20,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wenshu.writing.di.AppContainer
 import com.wenshu.writing.feature.ai.AiChatScreen
+import com.wenshu.writing.feature.ai.AiChatViewModel
 import com.wenshu.writing.feature.ai.AiProviderScreen
 import com.wenshu.writing.feature.editor.ChapterEditorScreen
 import com.wenshu.writing.feature.library.LibraryScreen
@@ -40,6 +42,20 @@ import com.wenshu.writing.feature.works.WorksScreen
 @Composable
 fun AppNavHost(container: AppContainer) {
     val navController = rememberNavController()
+    // AI 对话的 ViewModel 提升到 Activity 作用域：切换 tab / 打开其他页面时不会被销毁，
+    // 正在进行的生成继续在后台运行，返回后自动恢复原会话与滚动位置。
+    val aiChatViewModel: AiChatViewModel = viewModel(
+        factory = AiChatViewModel.factory(
+            preferencesRepository = container.preferencesRepository,
+            novelRepository = container.novelRepository,
+            skillRepository = container.skillRepository,
+            chatRepository = container.chatRepository,
+            pipelineRepository = container.pipelineRepository,
+            settingRepository = container.settingRepository,
+            memoRepository = container.memoRepository,
+            aiClient = container.aiClient
+        )
+    )
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     // 输入法弹出时隐藏底部导航栏，避免它的高度叠加到 imePadding 上产生大片空白。
@@ -89,6 +105,7 @@ fun AppNavHost(container: AppContainer) {
             composable(Routes.AI) {
                 AiChatScreen(
                     container = container,
+                    viewModel = aiChatViewModel,
                     onOpenProviders = {
                         navController.navigate(Routes.AI_PROVIDERS) {
                             launchSingleTop = true

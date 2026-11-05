@@ -56,6 +56,16 @@ enum class SaveTarget {
 
 /** AI 解析混合文档后得到的结构化结果。 */
 data class ParsedDocItem(val title: String, val content: String)
+
+/** AI 输出的非书稿类资料（分析报告 / 扫榜资料 / 调研文档），统一落到备忘录。 */
+data class ParsedMemoDoc(val title: String, val content: String)
+
+/** 从 AI 回复中剥离标记后的结果。 */
+private data class ExtractedReply(
+    val text: String,
+    val doc: ParsedDocResult? = null,
+    val memo: ParsedMemoDoc? = null
+)
 data class ParsedCharacter(val name: String, val role: String, val description: String)
 data class ParsedWorldSetting(val category: String, val title: String, val content: String)
 data class ParsedDocResult(
@@ -96,6 +106,8 @@ data class AiChatUiState(
     val searchSources: List<String> = emptyList(),
     val novels: List<Novel> = emptyList(),
     val selectedNovelId: Long? = null,
+    /** 全局激活的书稿 ID（-1 表示未选择），用于把 AI 资料文档归入备忘录对应分组。 */
+    val activeNovelId: Long = -1L,
     val skills: List<Skill> = emptyList(),
     val mentionQuery: String? = null,
     val mentionResults: List<Skill> = emptyList(),
@@ -145,6 +157,20 @@ class AiChatViewModel(
     /** 技能 question 工具等待用户回答的挂起点。 */
     private var pendingQuestionDeferred: CompletableDeferred<String>? = null
 
+    /** 离开对话页时记下的滚动位置，回到页面后据此恢复，避免被重置到顶部或底部。 */
+    var savedScrollIndex: Int = 0
+        private set
+    var savedScrollOffset: Int = 0
+        private set
+
+    /** 是否已经进入过对话页；首次进入时不做滚动位置恢复，直接定位最新消息。 */
+    var hasOpenedChat: Boolean = false
+        private set
+
+    fun markChatOpened() {
+        hasOpenedChat = true
+    }
+
     private val _uiState = MutableStateFlow(AiChatUiState())
     val uiState: StateFlow<AiChatUiState> = _uiState.asStateFlow()
 
@@ -175,7 +201,8 @@ class AiChatViewModel(
                             baseUrl = active?.baseUrl ?: "",
                             apiKey = active?.apiKey ?: "",
                             model = active?.model ?: "",
-                            apiType = active?.apiType ?: ApiProviderType.OPENAI
+                            apiType = active?.apiType ?: ApiProviderType.OPENAI,
+                            activeNovelId = settings.activeNovelId
                         )
                     }
                 }
@@ -764,20 +791,55 @@ class AiChatViewModel(
 
     /**
      * 保存 AI 回复，并解析文档建档标记。
-     * 1.0.6 起支持完整文档解析：书名 + 大纲 + 人物 + 世界观 + 自定义分类全部落库。
+     * 书稿创建受到严格约束：只有用户明确下达「创建新书 / 续写书稿」指令时才允许新增书稿；
+     * 分析报告、扫榜资料、调研文档等非书稿内容统一写入备忘录。
      */
     private suspend fun handleAssistantReply(
         sessionId: Long,
         rawReply: String,
         userText: String
     ) {
-        val (cleanReply, doc) = extractDocMarker(rawReply)
+        val extracted = extractMarkers(rawReply)
         chatRepository.appendMessage(
             sessionId = sessionId,
             role = ChatRole.ASSISTANT,
-            content = cleanReply.ifBlank { rawReply }
+            content = extracted.text.ifBlank { rawReply }
         )
-        if (doc == null || userText.isBlank()) return
+
+        // 非书稿类资料：模型标记的分析 / 调研文档直接进入备忘录，不写设定库。
+        extracted.memo?.let { memo ->
+            saveMemoDoc(sessionId, memo.title, memo.content)
+            return
+        }
+
+        val doc = extracted.doc ?: return
+        if (userText.isBlank()) return
+
+        val explicitCreate = isExplicitBookCreation(userText)
+        if (!explicitCreate) {
+            // 未明确要求建书：小说设定写入当前书稿，其余资料一律进备忘录，绝不新增书稿。
+            val boundBookId = _uiState.value.activeSessionBookId ?: _uiState.value.selectedNovelId
+            val isNovelSetting = !doc.outline.isNullOrBlank() ||
+                doc.characters.isNotEmpty() ||
+                doc.worldSettings.isNotEmpty()
+            if (boundBookId != null && isNovelSetting) {
+                persistDoc(boundBookId, doc)
+                val bookTitle = _uiState.value.novels
+                    .firstOrNull { it.id == boundBookId }?.title ?: "当前书稿"
+                chatRepository.appendMessage(
+                    sessionId = sessionId,
+                    role = ChatRole.ASSISTANT,
+                    content = "已将解析内容写入书稿《$bookTitle》的设定库"
+                )
+            } else {
+                saveMemoDoc(
+                    sessionId = sessionId,
+                    title = doc.title?.takeIf { it.isNotBlank() } ?: defaultMemoTitle(),
+                    content = extracted.text
+                )
+            }
+            return
+        }
 
         // 未识别到书名：询问用户手动输入，不强制创建
         val title = doc.title?.takeIf { it.isNotBlank() }
@@ -802,6 +864,29 @@ class AiChatViewModel(
                 )
             }
         }
+    }
+
+    /** 把非书稿类资料写入备忘录（优先归入当前会话绑定的书稿）。 */
+    private suspend fun saveMemoDoc(sessionId: Long, title: String, content: String) {
+        val state = _uiState.value
+        val bookId = state.activeSessionBookId
+            ?: state.activeNovelId.takeIf { id -> state.novels.any { it.id == id } }
+        val memoTitle = title.trim().ifBlank { defaultMemoTitle() }
+        memoRepository.create(title = memoTitle, content = content, bookId = bookId)
+        chatRepository.appendMessage(
+            sessionId = sessionId,
+            role = ChatRole.ASSISTANT,
+            content = "已将该资料存入【备忘录】：$memoTitle"
+        )
+    }
+
+    private fun defaultMemoTitle(): String =
+        "AI资料_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+
+    /** 用户是否明确要求创建新书 / 续写书稿。 */
+    private fun isExplicitBookCreation(text: String): Boolean {
+        val normalized = text.replace(Regex("[\\s，。！？、,.!?：:；;（）()]"), "")
+        return EXPLICIT_BOOK_KEYWORDS.any { normalized.contains(it) }
     }
 
     /** 把解析出的全部内容按分类写入指定书稿的设定库。 */
@@ -972,6 +1057,12 @@ class AiChatViewModel(
         }
     }
 
+    /** 记录对话列表的滚动位置，供离开页面再返回时恢复。 */
+    fun saveScrollPosition(index: Int, offset: Int) {
+        savedScrollIndex = index
+        savedScrollOffset = offset
+    }
+
     /** 将整条 AI 消息保存到指定书稿的章节 / 大纲 / 备忘录。 */
     fun saveMessageContent(
         content: String,
@@ -1050,6 +1141,16 @@ class AiChatViewModel(
         /** 模型输出的文档建档标记；由 App 解析并创建书稿与分类设定。 */
         private const val DOC_MARKER = "<<WENSHU_NEW_BOOK>>"
 
+        /** 模型输出的非书稿资料标记；由 App 解析并存入备忘录。 */
+        private const val MEMO_MARKER = "<<WENSHU_MEMO_DOC>>"
+
+        /** 明确的新建书稿 / 续写指令关键词，缺少这些关键词时禁止自动创建书稿。 */
+        private val EXPLICIT_BOOK_KEYWORDS = listOf(
+            "创建新书", "新建新书", "新建书稿", "创建书稿", "新建一本书", "创建一本书",
+            "开新书", "新开一本书", "新建小说", "创建小说", "新建书籍", "创建书籍",
+            "生成新书", "写一本新书", "续写书稿", "帮我建书", "帮我开书"
+        )
+
         private val json = Json {
             ignoreUnknownKeys = true
             isLenient = true
@@ -1057,17 +1158,18 @@ class AiChatViewModel(
         }
 
         private val DOC_PROTOCOL = """
-【全文建档协议】当用户粘贴或输入一份混合长文（可能包含书名、大纲、人物、世界观、势力、道具、功法、伏笔、设定杂项等）时：
+【建档协议】必须严格区分三种情况，不得混用：
+A. 新建书稿：仅当用户明确下达「创建新书 / 新建书稿 / 续写书稿」等建书指令，且内容是小说设定（书名、大纲、人物、世界观等）时：
 1. 正常给出简短的确认或建议，不要复述原文；
 2. 在回复的最后单独一行输出标记和 JSON：
 <<WENSHU_NEW_BOOK>>{"title":"书名","outline":"大纲正文","characters":[{"name":"角色名","role":"身份","description":"描述"}],"worldSettings":[{"category":"分类","title":"标题","content":"内容"}],"custom":{"势力":[{"title":"标题","content":"内容"}],"道具":[{"title":"标题","content":"内容"}]}}
 3. title：提取正式书名，去掉《》和多余空格；识别不到书名时填 null 或留空字符串，App 会让用户手动输入；
-4. outline：大纲正文，无则省略或填空字符串；
-5. characters：人物列表，每项含 name（姓名）、role（身份/定位）、description（外貌性格背景等描述）；无则省略；
-6. worldSettings：世界观/世界规则/背景设定，每项含 category（子分类，可空）、title、content；无则省略；
-7. custom：其他自定义设定（如势力、道具、功法、伏笔、种族等），键为分类名，值为条目数组（含 title、content）；无则省略；
-8. 只输出一个 JSON 对象，不要输出多个，不要虚构 bookId，全部数据落库由 App 完成；
-9. 用户输入不是有效文档时，不要输出该标记。
+4. characters / worldSettings / custom 分别对应人物、世界观、其他设定，无则省略；
+B. 资料文档：当用户要求输出分析报告、扫榜分析、市场调研、资料整理等非小说设定内容时，不要输出 A 的建书标记，改为在回复最后单独一行输出：
+<<WENSHU_MEMO_DOC>>{"title":"文档标题","content":"Markdown 格式的完整文档正文"}
+App 会把该文档存入【备忘录】，不会新建书稿，也不会写入设定库；
+C. 其他情况（普通问答、闲聊、片段写作、Skill 制作与调试、修改已有设定、分析资料）：禁止输出任何标记，禁止建议 App 新建书稿。
+8. 只输出一个 JSON 对象，不要输出多个，不要虚构 bookId，全部数据落库由 App 完成。
 """.trim()
 
         /** 取出输入框末尾正在输入的 @ 关键字；不处于 @ 语境时返回 null。 */
@@ -1108,23 +1210,53 @@ class AiChatViewModel(
             }
         }
 
-        /** 剥离建档标记，返回给用户展示的文本与解析出的文档结构。 */
-        private fun extractDocMarker(reply: String): Pair<String, ParsedDocResult?> {
-            val index = reply.indexOf(DOC_MARKER)
-            if (index < 0) return reply to null
-            val after = reply.substring(index + DOC_MARKER.length).trim()
-            val start = after.indexOf('{')
-            val end = if (start >= 0) findMatchingBrace(after, start) else -1
-            val doc = if (start >= 0 && end > start) {
-                runCatching { parseDocJson(after.substring(start, end + 1)) }.getOrNull()
-            } else {
-                null
+        /** 剥离建档标记，返回展示文本、书稿结构与资料文档。 */
+        private fun extractMarkers(reply: String): ExtractedReply {
+            var clean = reply
+            var doc: ParsedDocResult? = null
+            var memo: ParsedMemoDoc? = null
+
+            val docIndex = clean.indexOf(DOC_MARKER)
+            if (docIndex >= 0) {
+                val after = clean.substring(docIndex + DOC_MARKER.length).trim()
+                val start = after.indexOf('{')
+                val end = if (start >= 0) findMatchingBrace(after, start) else -1
+                doc = if (start >= 0 && end > start) {
+                    runCatching { parseDocJson(after.substring(start, end + 1)) }.getOrNull()
+                } else {
+                    null
+                }
+                clean = clean.substring(0, docIndex)
+                    .trimEnd()
+                    .removeSuffix("```")
+                    .trimEnd()
             }
-            val clean = reply.substring(0, index)
-                .trimEnd()
-                .removeSuffix("```")
-                .trimEnd()
-            return clean to doc
+
+            val memoIndex = clean.indexOf(MEMO_MARKER)
+            if (memoIndex >= 0) {
+                val after = clean.substring(memoIndex + MEMO_MARKER.length).trim()
+                val start = after.indexOf('{')
+                val end = if (start >= 0) findMatchingBrace(after, start) else -1
+                memo = if (start >= 0 && end > start) {
+                    runCatching { parseMemoJson(after.substring(start, end + 1)) }.getOrNull()
+                } else {
+                    null
+                }
+                clean = clean.substring(0, memoIndex)
+                    .trimEnd()
+                    .removeSuffix("```")
+                    .trimEnd()
+            }
+            return ExtractedReply(text = clean, doc = doc, memo = memo)
+        }
+
+        /** 解析资料文档 JSON：title + content（Markdown 全文）。 */
+        private fun parseMemoJson(raw: String): ParsedMemoDoc? {
+            val obj = json.parseToJsonElement(raw).jsonObject
+            val title = obj["title"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            val content = obj["content"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            if (content.isBlank()) return null
+            return ParsedMemoDoc(title = title, content = content)
         }
 
         private fun findMatchingBrace(text: String, openIndex: Int): Int {

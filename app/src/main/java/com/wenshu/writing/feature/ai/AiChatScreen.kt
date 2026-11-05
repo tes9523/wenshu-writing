@@ -81,6 +81,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -115,21 +116,10 @@ import kotlinx.coroutines.launch
 @Composable
 fun AiChatScreen(
     container: AppContainer,
+    viewModel: AiChatViewModel,
     onOpenProviders: () -> Unit,
     onOpenPipeline: (novelId: Long, skillId: Long) -> Unit
 ) {
-    val viewModel: AiChatViewModel = viewModel(
-        factory = AiChatViewModel.factory(
-            preferencesRepository = container.preferencesRepository,
-            novelRepository = container.novelRepository,
-            skillRepository = container.skillRepository,
-            chatRepository = container.chatRepository,
-            pipelineRepository = container.pipelineRepository,
-            settingRepository = container.settingRepository,
-            memoRepository = container.memoRepository,
-            aiClient = container.aiClient
-        )
-    )
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val appSettings by container.preferencesRepository.settings.collectAsStateWithLifecycle(
         initialValue = com.wenshu.writing.domain.model.AppSettings()
@@ -151,6 +141,29 @@ fun AiChatScreen(
     var selectionEpoch by remember { mutableStateOf(0) }
     /** 上一次呈现的会话，用于切换会话时强制定位到最新消息。 */
     var lastSessionId by remember { mutableStateOf<Long?>(null) }
+    /** 是否是「离开后再次回到对话页」：是则先恢复上次的滚动位置，而不是跳到底部。 */
+    val isReturning = remember { viewModel.hasOpenedChat.also { viewModel.markChatOpened() } }
+    var restoreScrollPending by remember { mutableStateOf(isReturning) }
+    val savedIndexOnEnter = remember { viewModel.savedScrollIndex }
+    val savedOffsetOnEnter = remember { viewModel.savedScrollOffset }
+
+    // 返回页面后等消息加载完成再恢复滚动位置，避免被自动滚动覆盖。
+    LaunchedEffect(state.messages.size) {
+        if (restoreScrollPending && state.messages.isNotEmpty()) {
+            restoreScrollPending = false
+            lastSessionId = state.activeSessionId
+            listState.scrollToItem(
+                savedIndexOnEnter.coerceIn(0, state.messages.lastIndex),
+                savedOffsetOnEnter.coerceAtLeast(0)
+            )
+        }
+    }
+
+    // 持续记录滚动位置，供下次回到页面时恢复。
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+            .collect { (index, offset) -> viewModel.saveScrollPosition(index, offset) }
+    }
 
     /** 对话视口是否已滚动到最底部，用于控制「一键到底」浮动按钮。 */
     val isAtBottom by remember(listState) {
@@ -208,6 +221,7 @@ fun AiChatScreen(
             (if (state.isSending) 1 else 0) +
             (if (state.pendingQuestion != null) 1 else 0)
         if (itemCount == 0) return@LaunchedEffect
+        if (restoreScrollPending) return@LaunchedEffect
         val switchedSession = lastSessionId != state.activeSessionId
         lastSessionId = state.activeSessionId
         // 切换会话时直接定位最新消息；停留在底部时才跟随新消息，避免打断向上翻阅历史。
