@@ -9,8 +9,20 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface NovelDao {
 
-    @Query("SELECT * FROM novels ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM novels WHERE deletedAt IS NULL ORDER BY updatedAt DESC")
     fun observeAll(): Flow<List<NovelEntity>>
+
+    /** 回收站中的书稿（按移入时间倒序）。 */
+    @Query("SELECT * FROM novels WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC")
+    fun observeTrash(): Flow<List<NovelEntity>>
+
+    /** 移入回收站（软删除）。 */
+    @Query("UPDATE novels SET deletedAt = :deletedAt WHERE id = :id")
+    suspend fun softDelete(id: Long, deletedAt: Long)
+
+    /** 从回收站恢复。 */
+    @Query("UPDATE novels SET deletedAt = NULL WHERE id = :id")
+    suspend fun restore(id: Long)
 
     @Query("SELECT * FROM novels WHERE id = :id")
     fun observeById(id: Long): Flow<NovelEntity?>
@@ -18,7 +30,7 @@ interface NovelDao {
     @Query("SELECT * FROM novels WHERE id = :id")
     suspend fun getById(id: Long): NovelEntity?
 
-    @Query("SELECT * FROM novels WHERE title = :title LIMIT 1")
+    @Query("SELECT * FROM novels WHERE title = :title AND deletedAt IS NULL LIMIT 1")
     suspend fun getByTitle(title: String): NovelEntity?
 
     @Insert

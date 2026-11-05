@@ -1,7 +1,9 @@
 package com.wenshu.writing.data.repository
 
 import com.wenshu.writing.data.local.dao.ChapterDao
+import com.wenshu.writing.data.local.dao.MemoDao
 import com.wenshu.writing.data.local.dao.NovelDao
+import com.wenshu.writing.data.local.dao.SettingDao
 import com.wenshu.writing.data.local.entity.ChapterEntity
 import com.wenshu.writing.data.local.entity.NovelEntity
 import com.wenshu.writing.data.local.entity.toModel
@@ -12,10 +14,16 @@ import kotlinx.coroutines.flow.map
 
 class NovelRepository(
     private val novelDao: NovelDao,
-    private val chapterDao: ChapterDao
+    private val chapterDao: ChapterDao,
+    private val settingDao: SettingDao,
+    private val memoDao: MemoDao
 ) {
 
+    /** 书稿列表（不含回收站中的书稿）。 */
     val novels: Flow<List<Novel>> = novelDao.observeAll().map { list -> list.map { it.toModel() } }
+
+    /** 回收站中的书稿（按移入时间倒序）。 */
+    val trash: Flow<List<Novel>> = novelDao.observeTrash().map { list -> list.map { it.toModel() } }
 
     fun observeNovel(novelId: Long): Flow<Novel?> =
         novelDao.observeById(novelId).map { it?.toModel() }
@@ -48,6 +56,23 @@ class NovelRepository(
                 updatedAt = now
             )
         )
+    }
+
+    /** 移入回收站（软删除），设定、章节、备忘录保留，可随时恢复。 */
+    suspend fun moveToTrash(novelId: Long) {
+        novelDao.softDelete(novelId, System.currentTimeMillis())
+    }
+
+    /** 从回收站恢复书稿。 */
+    suspend fun restoreFromTrash(novelId: Long) {
+        novelDao.restore(novelId)
+    }
+
+    /** 回收站中的永久删除：连同关联的设定、章节、备忘录一并清除。 */
+    suspend fun deleteNovelPermanently(novelId: Long) {
+        settingDao.deleteByBookId(novelId)
+        memoDao.deleteByBookId(novelId)
+        novelDao.deleteById(novelId)
     }
 
     suspend fun deleteNovel(novelId: Long) {

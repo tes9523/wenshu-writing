@@ -42,6 +42,10 @@ interface SettingDao {
     @Query("DELETE FROM settings WHERE (bookId = :bookId OR (bookId IS NULL AND :bookId IS NULL)) AND category = :category")
     suspend fun deleteByCategory(bookId: Long?, category: String)
 
+    /** 回收站永久删除书稿时，连带清空该书稿的全部设定。 */
+    @Query("DELETE FROM settings WHERE bookId = :bookId")
+    suspend fun deleteByBookId(bookId: Long)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(entities: List<SettingEntity>)
 }

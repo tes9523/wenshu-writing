@@ -8,7 +8,9 @@ data class Novel(
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
     /** 自定义封面图片的本地绝对路径；null 表示使用默认封面。 */
-    val coverPath: String? = null
+    val coverPath: String? = null,
+    /** 回收站标记：非 null 表示已移入回收站，值为移入时间戳。 */
+    val deletedAt: Long? = null
 )
 
 /** 章节 */

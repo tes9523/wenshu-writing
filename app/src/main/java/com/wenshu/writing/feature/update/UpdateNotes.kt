@@ -36,6 +36,17 @@ data class UpdateNote(
 /** 历史更新公告（按版本倒序排列）。 */
 val UPDATE_NOTES: List<UpdateNote> = listOf(
     UpdateNote(
+        version = "1.1.4",
+        title = "书稿回收站 · 脑洞生成器 · 分类修复",
+        highlights = listOf(
+            "修复自定义分类重命名后被自动删除的问题，删除分类新增确认弹窗",
+            "移除设定库归属下拉中无效的「全局公共素材」选项",
+            "书稿删除先移入回收站，可随时恢复，永久删除才会清空章节与设定",
+            "AI 对话新增脑洞生成器：频段 + 题材 + 补充要求，一键生成书名/脑洞/金手指/爽点",
+            "优化 AI 首字响应链路，减少发送前的本地等待耗时"
+        )
+    ),
+    UpdateNote(
         version = "1.1.3",
         title = "存储落库修复 · 后台保活 · 切换提速",
         highlights = listOf(

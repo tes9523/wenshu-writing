@@ -427,9 +427,9 @@ class AiChatViewModel(
                 sessionId = sid
                 chatRepository.appendMessage(sid, ChatRole.USER, text)
 
-                // 首次发送 → 自动提炼会话标题
-                val session = chatRepository.getSession(sid)
-                if (session != null && (session.title.isBlank() || session.title == "新会话" || session.title.endsWith("新对话"))) {
+                // 首次发送 → 自动提炼会话标题（读内存会话列表，避免多一次数据库往返拖慢首字响应）
+                val session = _uiState.value.sessions.firstOrNull { it.id == sid }
+                if (session == null || session.title.isBlank() || session.title == "新会话" || session.title.endsWith("新对话")) {
                     val autoTitle = deriveSessionTitle(text)
                     chatRepository.renameSession(sid, autoTitle)
                 }
@@ -519,7 +519,26 @@ class AiChatViewModel(
             allowCreateProject = allowCreateProject
         )
         val messages = mutableListOf<AgentMessage>()
-        chatRepository.getMessages(sessionId).filterNot { it.isError }.forEach { message ->
+        // 首字延迟优化：当前活跃会话直接复用内存中的消息列表，跳过数据库全量查询；
+        // 刚发出的用户消息可能尚未经 Flow 回流到内存，按内容比对后手动补齐。
+        val historySource = if (sessionId == _uiState.value.activeSessionId) {
+            val cached = _uiState.value.messages
+            val tailMatches = cached.lastOrNull()
+                ?.let { it.role == ChatRole.USER && it.content == userText } == true
+            if (tailMatches) {
+                cached
+            } else {
+                cached + ChatMessage(
+                    id = -1L,
+                    role = ChatRole.USER,
+                    content = userText,
+                    createdAt = System.currentTimeMillis()
+                )
+            }
+        } else {
+            chatRepository.getMessages(sessionId)
+        }
+        historySource.filterNot { it.isError }.forEach { message ->
             messages.add(
                 AgentMessage(
                     role = if (message.role == ChatRole.USER) "user" else "assistant",

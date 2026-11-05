@@ -50,8 +50,9 @@ class WorksViewModel(
         }
     }
 
+    /** 删除书稿改为移入回收站，数据保留，可随时恢复。 */
     fun deleteNovel(novelId: Long) {
-        viewModelScope.launch { repository.deleteNovel(novelId) }
+        viewModelScope.launch { repository.moveToTrash(novelId) }
     }
 
     /** 保存或清除书稿自定义封面（null 表示恢复默认封面）。 */
@@ -146,6 +147,42 @@ data class ChapterListUiState(
     val chapters: List<Chapter> = emptyList(),
     val isLoading: Boolean = true
 )
+
+data class TrashUiState(
+    val novels: List<Novel> = emptyList(),
+    val isLoading: Boolean = true
+)
+
+/** 回收站：已被软删除的书稿，可恢复或永久删除。 */
+class TrashViewModel(
+    private val repository: NovelRepository
+) : ViewModel() {
+
+    val uiState: StateFlow<TrashUiState> = repository.trash
+        .map { novels -> TrashUiState(novels = novels, isLoading = false) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = TrashUiState()
+        )
+
+    fun restore(novelId: Long) {
+        viewModelScope.launch { repository.restoreFromTrash(novelId) }
+    }
+
+    fun deletePermanently(novelId: Long) {
+        viewModelScope.launch { repository.deleteNovelPermanently(novelId) }
+    }
+
+    companion object {
+        fun factory(repository: NovelRepository): ViewModelProvider.Factory =
+            object : ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                    TrashViewModel(repository) as T
+            }
+    }
+}
 
 class ChapterListViewModel(
     private val novelId: Long,

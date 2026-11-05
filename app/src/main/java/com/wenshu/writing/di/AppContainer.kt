@@ -22,7 +22,9 @@ class AppContainer(context: Context) {
 
     val novelRepository = NovelRepository(
         novelDao = database.novelDao(),
-        chapterDao = database.chapterDao()
+        chapterDao = database.chapterDao(),
+        settingDao = database.settingDao(),
+        memoDao = database.memoDao()
     )
 
     val settingRepository = SettingRepository(

@@ -46,6 +46,7 @@ import com.wenshu.writing.feature.update.UpdateAnnouncementStore
 import com.wenshu.writing.feature.update.UpdateNote
 import com.wenshu.writing.feature.update.currentVersionName
 import com.wenshu.writing.feature.works.ChapterListScreen
+import com.wenshu.writing.feature.works.TrashScreen
 import com.wenshu.writing.feature.works.WorksScreen
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -104,7 +105,18 @@ fun AppNavHost(container: AppContainer) {
                     container = container,
                     onOpenNovel = { novelId ->
                         navController.navigate(Routes.chapterList(novelId))
+                    },
+                    onOpenTrash = {
+                        navController.navigate(Routes.WORKS_TRASH) {
+                            launchSingleTop = true
+                        }
                     }
+                )
+            }
+            composable(Routes.WORKS_TRASH) {
+                TrashScreen(
+                    container = container,
+                    onBack = { navController.popBackStack() }
                 )
             }
             composable(Routes.LIBRARY) {

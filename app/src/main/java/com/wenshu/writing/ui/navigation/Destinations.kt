@@ -25,6 +25,7 @@ object Routes {
     const val CHAPTER_LIST = "novel/{novelId}/chapters"
     const val CHAPTER_EDITOR = "chapter/{chapterId}"
     const val PIPELINE = "pipeline/{novelId}/{skillId}"
+    const val WORKS_TRASH = "works/trash"
 
     fun chapterList(novelId: Long) = "novel/$novelId/chapters"
     fun chapterEditor(chapterId: Long) = "chapter/$chapterId"

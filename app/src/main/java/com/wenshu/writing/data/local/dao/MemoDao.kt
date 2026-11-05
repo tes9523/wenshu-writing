@@ -39,4 +39,8 @@ interface MemoDao {
 
     @Query("DELETE FROM memo_notes WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    /** 回收站永久删除书稿时，连带清空该书稿的备忘录。 */
+    @Query("DELETE FROM memo_notes WHERE bookId = :bookId")
+    suspend fun deleteByBookId(bookId: Long)
 }

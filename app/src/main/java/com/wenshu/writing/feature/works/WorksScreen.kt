@@ -71,7 +71,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun WorksScreen(
     container: AppContainer,
-    onOpenNovel: (Long) -> Unit
+    onOpenNovel: (Long) -> Unit,
+    onOpenTrash: () -> Unit
 ) {
     val viewModel: WorksViewModel = viewModel(
         factory = WorksViewModel.factory(
@@ -145,6 +146,9 @@ fun WorksScreen(
             TopAppBar(
                 title = { Text("书稿", style = MaterialTheme.typography.titleLarge) },
                 actions = {
+                    IconButton(onClick = onOpenTrash) {
+                        Icon(Icons.Outlined.DeleteOutline, contentDescription = "回收站")
+                    }
                     IconButton(onClick = { importLauncher.launch(arrayOf("application/zip")) }) {
                         Icon(Icons.Outlined.FileUpload, contentDescription = "导入整书数据包")
                     }
@@ -225,8 +229,9 @@ fun WorksScreen(
 
     novelToDelete?.let { novel ->
         ConfirmDeleteDialog(
-            title = "删除作品",
-            message = "确定删除《${novel.title}》及其全部章节吗？此操作不可恢复。",
+            title = "移入回收站",
+            message = "确定将《${novel.title}》移入回收站吗？章节与设定会一并保留，可随时在回收站中恢复。",
+            confirmText = "移入回收站",
             onConfirm = {
                 viewModel.deleteNovel(novel.id)
                 novelToDelete = null

@@ -92,6 +92,7 @@ fun LibraryScreen(
     var toDelete by remember { mutableStateOf<Setting?>(null) }
     var showAddCategory by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<String?>(null) }
+    var deleteCategoryTarget by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(state.message) {
         // 轻量提示由 Snackbar 处理；此处留空，避免额外依赖。
@@ -137,7 +138,7 @@ fun LibraryScreen(
                 onAddCategory = { showAddCategory = true },
                 onRename = { renameTarget = it },
                 onDelete = { name ->
-                    viewModel.deleteCategory(name)
+                    deleteCategoryTarget = name
                 }
             )
 
@@ -230,6 +231,18 @@ fun LibraryScreen(
             onDismiss = { renameTarget = null }
         )
     }
+
+    deleteCategoryTarget?.let { name ->
+        ConfirmDeleteDialog(
+            title = "删除分类",
+            message = "确定删除分类「$name」吗？该分类下的全部设定将一并删除，且不可恢复。",
+            onConfirm = {
+                viewModel.deleteCategory(name)
+                deleteCategoryTarget = null
+            },
+            onDismiss = { deleteCategoryTarget = null }
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -240,7 +253,7 @@ private fun BookSelectorBar(
     onSelect: (Long?) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val selectedTitle = novels.firstOrNull { it.id == activeBookId }?.title ?: "全局公共素材"
+    val selectedTitle = novels.firstOrNull { it.id == activeBookId }?.title ?: "请选择书稿"
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { expanded = !expanded },
@@ -260,10 +273,6 @@ private fun BookSelectorBar(
                 .menuAnchor(MenuAnchorType.PrimaryNotEditable)
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(
-                text = { Text("全局公共素材") },
-                onClick = { onSelect(null); expanded = false }
-            )
             novels.forEach { novel ->
                 DropdownMenuItem(
                     text = { Text(novel.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },

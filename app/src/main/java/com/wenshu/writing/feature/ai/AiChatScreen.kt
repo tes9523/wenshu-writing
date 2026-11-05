@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
@@ -103,6 +104,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wenshu.writing.di.AppContainer
+import com.wenshu.writing.feature.brainstorm.BrainstormDialog
 import com.wenshu.writing.domain.model.ChatMessage
 import com.wenshu.writing.domain.model.ChatRole
 import com.wenshu.writing.domain.model.ChatSession
@@ -136,6 +138,7 @@ fun AiChatScreen(
     var messageToDelete by remember { mutableStateOf<ChatMessage?>(null) }
     var sessionToDelete by remember { mutableStateOf<ChatSession?>(null) }
     var showBindBookDialog by remember { mutableStateOf(false) }
+    var showBrainstorm by remember { mutableStateOf(false) }
     var showLogDialog by remember { mutableStateOf(false) }
     /** 点击页面空白时递增，用于清空文本选中状态。 */
     var selectionEpoch by remember { mutableStateOf(0) }
@@ -367,6 +370,12 @@ fun AiChatScreen(
                         }
                     },
                     actions = {
+                        IconButton(onClick = { showBrainstorm = true }) {
+                            Icon(
+                                Icons.Outlined.Lightbulb,
+                                contentDescription = "脑洞生成器"
+                            )
+                        }
                         IconButton(onClick = { showBindBookDialog = true }) {
                             Icon(
                                 Icons.Outlined.AutoAwesome,
@@ -510,6 +519,13 @@ fun AiChatScreen(
                 )
             }
         }
+    }
+
+    if (showBrainstorm) {
+        BrainstormDialog(
+            container = container,
+            onDismiss = { showBrainstorm = false }
+        )
     }
 
     if (showBindBookDialog) {

@@ -99,11 +99,12 @@ class SettingRepository(
     /** 重命名分类：把本书该分类下所有条目的 category 改为新名称。 */
     suspend fun renameCategory(bookId: Long?, oldCategory: String, newCategory: String) =
         withContext(Dispatchers.IO) {
-            if (oldCategory == newCategory) return@withContext
+            val trimmed = newCategory.trim()
+            if (trimmed.isEmpty() || trimmed == oldCategory) return@withContext
             val now = System.currentTimeMillis()
+            // 注意必须原地 update：先 insert 同 id 再 deleteById 会把刚写入的新行一并删掉。
             settingDao.getByCategory(bookId, oldCategory).forEach { entity ->
-                settingDao.insert(entity.copy(category = newCategory, updatedAt = now))
-                settingDao.deleteById(entity.id)
+                settingDao.update(entity.copy(category = trimmed, updatedAt = now))
             }
         }
 

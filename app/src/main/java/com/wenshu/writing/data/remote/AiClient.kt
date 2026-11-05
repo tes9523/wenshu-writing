@@ -80,6 +80,8 @@ class AiClient(
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
+        // 连接失败时自动重试，减少偶发握手失败带来的额外等待
+        .retryOnConnectionFailure(true)
         .build(),
     private val json: Json = Json {
         ignoreUnknownKeys = true

@@ -42,7 +42,7 @@ import com.wenshu.writing.data.local.entity.SkillEntity
         ChapterTaskEntity::class,
         PipelineRunEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -266,6 +266,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** 1.1.3 -> 1.1.4：书稿回收站，deletedAt 非空表示已移入回收站。 */
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `novels` ADD COLUMN `deletedAt` INTEGER")
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -283,7 +290,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_4_5,
                         MIGRATION_5_6,
                         MIGRATION_6_7,
-                        MIGRATION_7_8
+                        MIGRATION_7_8,
+                        MIGRATION_8_9
                     )
                     .build()
                     .also { instance = it }

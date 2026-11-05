@@ -14,7 +14,9 @@ data class NovelEntity(
     val createdAt: Long,
     val updatedAt: Long,
     /** 自定义封面的本地文件路径；为 null 时展示默认封面。 */
-    val coverPath: String? = null
+    val coverPath: String? = null,
+    /** 回收站标记：非 null 表示书稿已移入回收站，记录移入时间。 */
+    val deletedAt: Long? = null
 )
 
 @Entity(
