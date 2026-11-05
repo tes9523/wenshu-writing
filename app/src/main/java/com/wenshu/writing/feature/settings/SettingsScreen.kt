@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.AutoStories
+import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Card
@@ -26,10 +27,15 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.wenshu.writing.di.AppContainer
+import com.wenshu.writing.feature.update.UpdateHistoryDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,6 +45,7 @@ fun SettingsScreen(
     onOpenSkills: () -> Unit,
     onOpenAppearance: () -> Unit
 ) {
+    var showUpdateHistory by remember { mutableStateOf(false) }
     Scaffold(
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         topBar = {
@@ -182,6 +189,41 @@ fun SettingsScreen(
             item { SectionLabel("关于") }
             item {
                 Card(
+                    onClick = { showUpdateHistory = true },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Campaign,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("更新公告", style = MaterialTheme.typography.titleSmall)
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                "查看当前版本与历史版本的更新内容。",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(
+                            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            item {
+                Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
                 ) {
@@ -201,7 +243,7 @@ fun SettingsScreen(
                             Text("文枢写作", style = MaterialTheme.typography.titleSmall)
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                "版本 1.1.2 · 本地优先的长篇小说写作工具",
+                                "版本 1.1.3 · 本地优先的长篇小说写作工具",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -210,6 +252,10 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+
+    if (showUpdateHistory) {
+        UpdateHistoryDialog(onDismiss = { showUpdateHistory = false })
     }
 }
 

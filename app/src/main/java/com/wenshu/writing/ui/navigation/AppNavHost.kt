@@ -10,8 +10,13 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
@@ -35,6 +40,11 @@ import com.wenshu.writing.feature.settings.SettingsScreen
 import com.wenshu.writing.feature.skill.SkillEditorScreen
 import com.wenshu.writing.feature.skill.SkillScreen
 import com.wenshu.writing.feature.splash.SplashScreen
+import com.wenshu.writing.feature.update.UPDATE_NOTES
+import com.wenshu.writing.feature.update.UpdateAnnouncementDialog
+import com.wenshu.writing.feature.update.UpdateAnnouncementStore
+import com.wenshu.writing.feature.update.UpdateNote
+import com.wenshu.writing.feature.update.currentVersionName
 import com.wenshu.writing.feature.works.ChapterListScreen
 import com.wenshu.writing.feature.works.WorksScreen
 
@@ -42,25 +52,26 @@ import com.wenshu.writing.feature.works.WorksScreen
 @Composable
 fun AppNavHost(container: AppContainer) {
     val navController = rememberNavController()
-    // AI 对话的 ViewModel 提升到 Activity 作用域：切换 tab / 打开其他页面时不会被销毁，
-    // 正在进行的生成继续在后台运行，返回后自动恢复原会话与滚动位置。
-    val aiChatViewModel: AiChatViewModel = viewModel(
-        factory = AiChatViewModel.factory(
-            preferencesRepository = container.preferencesRepository,
-            novelRepository = container.novelRepository,
-            skillRepository = container.skillRepository,
-            chatRepository = container.chatRepository,
-            pipelineRepository = container.pipelineRepository,
-            settingRepository = container.settingRepository,
-            memoRepository = container.memoRepository,
-            aiClient = container.aiClient
-        )
-    )
+    // AI 对话的 ViewModel 由 AppContainer 持有（进程级单例）：
+    // 切换页面、App 退到后台、Activity 重建都不会打断正在进行的生成任务。
+    val aiChatViewModel: AiChatViewModel = container.aiChatViewModel
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     // 输入法弹出时隐藏底部导航栏，避免它的高度叠加到 imePadding 上产生大片空白。
     val imeVisible = WindowInsets.isImeVisible
     val showBottomBar = topLevelDestinations.any { it.route == currentRoute } && !imeVisible
+
+    // 版本更新公告：同一版本首次打开时自动弹出一次，重装或升级后重新弹出。
+    val context = LocalContext.current
+    var updateNote by remember { mutableStateOf<UpdateNote?>(null) }
+    LaunchedEffect(Unit) {
+        val version = currentVersionName(context) ?: return@LaunchedEffect
+        if (!UpdateAnnouncementStore.hasSeen(context, version)) {
+            UpdateAnnouncementStore.markSeen(context, version)
+            updateNote = UPDATE_NOTES.firstOrNull { it.version == version }
+                ?: UpdateNote(version, "本次更新已安装", emptyList())
+        }
+    }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -226,6 +237,13 @@ fun AppNavHost(container: AppContainer) {
             }
         }
     }
+
+    updateNote?.let { note ->
+        UpdateAnnouncementDialog(
+            note = note,
+            onDismiss = { updateNote = null }
+        )
+    }
 }
 
 @Composable
@@ -239,7 +257,9 @@ private fun AppBottomBar(
                 selected = currentRoute == destination.route,
                 onClick = {
                     navController.navigate(destination.route) {
-                        popUpTo(navController.graph.findStartDestination().id) {
+                        // 顶部 tab 以书稿页为栈底：切换时保存/恢复各页状态，
+                        // 避免每次切换都重建页面、重复全量加载列表。
+                        popUpTo(Routes.WORKS) {
                             saveState = true
                         }
                         launchSingleTop = true

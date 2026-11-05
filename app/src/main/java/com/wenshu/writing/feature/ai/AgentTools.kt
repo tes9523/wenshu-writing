@@ -47,6 +47,8 @@ class AgentToolExecutor(
     private val activeSkillsProvider: () -> List<Skill>,
     private val askQuestion: suspend (PendingQuestion) -> String,
     private val log: (String) -> Unit,
+    /** 写入成功后回调，用于把书稿切换为当前激活书稿，保证用户在书稿/设定库中能看到刚写入的内容。 */
+    private val onBookVisible: suspend (Long) -> Unit = {},
     /** 是否允许创建书稿。仅「创建新书」类技能开启；制作/调试 Skill 时禁止生成书稿条目。 */
     private val allowCreateProject: Boolean = true
 ) {
@@ -87,12 +89,15 @@ class AgentToolExecutor(
         val description = args.stringOf("description", "intro").ifBlank { "由 AI 技能创建" }
         val existing = novelRepository.findNovelByTitle(title)
         val novelId = existing?.id ?: novelRepository.createNovel(title, description)
+        val saved = novelRepository.getNovel(novelId)
+            ?: return "创建失败：书稿《$title》未能写入数据库，请稍后重试"
         sessionIdProvider()?.let { chatRepository.bindSessionBook(it, novelId) }
+        onBookVisible(novelId)
         log("create_project -> novelId=$novelId")
         return if (existing != null) {
-            "书稿《${existing.title}》已存在（novelId=$novelId），已绑定到当前会话。"
+            "书稿《${saved.title}》已存在（novelId=$novelId），已绑定到当前会话。"
         } else {
-            "已创建书稿《$title》（novelId=$novelId），并绑定到当前会话。"
+            "已创建书稿《${saved.title}》（novelId=$novelId），并绑定到当前会话。"
         }
     }
 
@@ -150,34 +155,68 @@ class AgentToolExecutor(
         if (content.isBlank()) return "写入失败：content 为空"
         val path = normalizePath(rawPath)
         val bookId = currentBookId()
-            ?: return "当前会话未绑定书稿。请先调用 create_project 创建书稿后再写入文件。"
+            ?: return "写入失败：当前会话未绑定书稿。请先调用 create_project 创建书稿后再写入文件。"
+        // 校验目标书稿真实存在，避免写入到已被删除或不存在的书稿。
+        if (novelRepository.getNovel(bookId) == null) {
+            return "写入失败：目标书稿不存在（ID=$bookId，可能已被删除），请重新创建或绑定书稿。"
+        }
 
         return when {
             path == "小说资料/人物库.md" || path == "人物库.md" -> {
-                replaceCategory(
-                    bookId,
-                    SettingCategories.CHARACTER,
-                    parseCharacters(content)
-                )
-                "已写入 小说资料/人物库.md（${parseCharacters(content).size} 条人物设定）"
+                val items = parseCharacters(content)
+                replaceCategory(bookId, SettingCategories.CHARACTER, items)
+                val error = verifyCategory(bookId, SettingCategories.CHARACTER, items)
+                if (error != null) return error
+                finishWrite(bookId, "已写入 小说资料/人物库.md（${items.size} 条人物设定，已校验入库）")
             }
             path == "小说资料/世界观.md" || path == "世界观.md" -> {
-                replaceCategory(bookId, SettingCategories.WORLD, parseWorld(content))
-                "已写入 小说资料/世界观.md（${parseWorld(content).size} 条世界观设定）"
+                val items = parseWorld(content)
+                replaceCategory(bookId, SettingCategories.WORLD, items)
+                val error = verifyCategory(bookId, SettingCategories.WORLD, items)
+                if (error != null) return error
+                finishWrite(bookId, "已写入 小说资料/世界观.md（${items.size} 条世界观设定，已校验入库）")
             }
             path == "小说资料/章节摘要.md" || path == "章节摘要.md" -> {
-                replaceCategory(
-                    bookId,
-                    CATEGORY_SUMMARY,
-                    listOf(Setting(category = CATEGORY_SUMMARY, title = "章节摘要", content = content))
+                val items = listOf(
+                    Setting(category = CATEGORY_SUMMARY, title = "章节摘要", content = content)
                 )
-                "已写入 小说资料/章节摘要.md"
+                replaceCategory(bookId, CATEGORY_SUMMARY, items)
+                val error = verifyCategory(bookId, CATEGORY_SUMMARY, items)
+                if (error != null) return error
+                finishWrite(bookId, "已写入 小说资料/章节摘要.md（已校验入库）")
             }
             path.startsWith("章节内容/") -> writeChapter(bookId, path, content)
             else -> {
                 writeProjectDoc(bookId, path, content)
-                "已写入 $path"
+                val saved = settingRepository.getByCategory(bookId, CATEGORY_DOC)
+                    .firstOrNull { it.title == path }
+                if (saved == null || saved.content.trim() != content.trim()) {
+                    "写入失败：项目文档「$path」写入后校验未通过（库中未找到对应内容）"
+                } else {
+                    finishWrite(bookId, "已写入 $path（已校验入库）")
+                }
             }
+        }
+    }
+
+    /** 写入成功后的统一出口：切换激活书稿并返回成功话术。 */
+    private suspend fun finishWrite(bookId: Long, message: String): String {
+        onBookVisible(bookId)
+        return message
+    }
+
+    /** 写入后重新读取校验：读取失败时返回错误信息，成功返回 null。 */
+    private suspend fun verifyCategory(bookId: Long, category: String, expected: List<Setting>): String? {
+        val saved = runCatching { settingRepository.getByCategory(bookId, category) }
+            .getOrElse { return "写入失败：读取校验异常（${it.message}）" }
+        if (expected.isEmpty()) return "写入失败：解析后没有可写入的条目，请检查文件格式"
+        val missing = expected.filter { item ->
+            saved.none { it.title == item.title && it.content.trim() == item.content.trim() }
+        }
+        return if (missing.isEmpty()) {
+            null
+        } else {
+            "写入失败：校验未通过，${missing.size} 条内容未入库（如「${missing.first().title}」），请重试"
         }
     }
 
@@ -421,13 +460,25 @@ class AgentToolExecutor(
         val existing = novelRepository.getChapters(bookId).firstOrNull {
             it.title == title || it.title == base || it.title.startsWith(base)
         }
-        return if (existing != null) {
+        val chapterId = if (existing != null) {
             novelRepository.saveChapter(existing.id, title, content)
-            "已更新章节文件 $path（章节「$title」）"
+            existing.id
         } else {
-            val chapterId = novelRepository.createChapter(bookId, title)
-            novelRepository.saveChapter(chapterId, title, content)
-            "已创建章节文件 $path（章节「$title」）"
+            novelRepository.createChapter(bookId, title).also { id ->
+                novelRepository.saveChapter(id, title, content)
+            }
+        }
+        // 写入后重新读取校验，确保章节正文真正持久化。
+        val saved = novelRepository.getChapter(chapterId)
+            ?: return "写入失败：章节「$title」写入后无法读取（可能未成功入库）"
+        if (saved.content.trim() != content.trim()) {
+            return "写入失败：章节「$title」写入后校验未通过（库中正文与写入内容不一致）"
+        }
+        onBookVisible(bookId)
+        return if (existing != null) {
+            "已更新章节文件 $path（章节「$title」已校验入库）"
+        } else {
+            "已创建章节文件 $path（章节「$title」已校验入库）"
         }
     }
 

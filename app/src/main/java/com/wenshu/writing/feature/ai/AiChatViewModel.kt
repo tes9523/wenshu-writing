@@ -515,6 +515,7 @@ class AiChatViewModel(
             activeSkillsProvider = { _uiState.value.skills.filter { it.enabled && !it.isPipeline } },
             askQuestion = ::requestQuestion,
             log = ::appendAgentLog,
+            onBookVisible = { bookId -> preferencesRepository.setActiveNovel(bookId) },
             allowCreateProject = allowCreateProject
         )
         val messages = mutableListOf<AgentMessage>()
@@ -587,6 +588,14 @@ class AiChatViewModel(
                 _uiState.update { it.copy(activeToolName = call.name) }
                 val result = executor.execute(call)
                 appendAgentLog("工具返回 ${call.name}：${result.take(300)}")
+                // 写库失败时在对话中明确提示，避免只显示模型给出的「已保存」话术误导用户。
+                if (result.startsWith("写入失败") || result.startsWith("创建失败")) {
+                    chatRepository.appendMessage(
+                        sessionId = sessionId,
+                        role = ChatRole.ASSISTANT,
+                        content = "⚠️ 保存失败：${result.removePrefix("写入失败：").removePrefix("创建失败：")}"
+                    )
+                }
                 messages.add(AgentMessage("tool", result, toolCallId = call.id))
             }
             _uiState.update { it.copy(streamingText = "", activeToolName = null) }
@@ -823,13 +832,18 @@ class AiChatViewModel(
                 doc.characters.isNotEmpty() ||
                 doc.worldSettings.isNotEmpty()
             if (boundBookId != null && isNovelSetting) {
-                persistDoc(boundBookId, doc)
+                val error = persistDoc(boundBookId, doc)
                 val bookTitle = _uiState.value.novels
                     .firstOrNull { it.id == boundBookId }?.title ?: "当前书稿"
+                preferencesRepository.setActiveNovel(boundBookId)
                 chatRepository.appendMessage(
                     sessionId = sessionId,
                     role = ChatRole.ASSISTANT,
-                    content = "已将解析内容写入书稿《$bookTitle》的设定库"
+                    content = if (error != null) {
+                        "⚠️ 保存失败：$error（书稿《$bookTitle》）。请重新发送或手动补充设定。"
+                    } else {
+                        "已将解析内容写入书稿《$bookTitle》的设定库（已校验入库）"
+                    }
                 )
             } else {
                 saveMemoDoc(
@@ -889,8 +903,11 @@ class AiChatViewModel(
         return EXPLICIT_BOOK_KEYWORDS.any { normalized.contains(it) }
     }
 
-    /** 把解析出的全部内容按分类写入指定书稿的设定库。 */
-    private suspend fun persistDoc(bookId: Long, doc: ParsedDocResult) {
+    /**
+     * 把解析出的全部内容按分类写入指定书稿的设定库。
+     * 写入后会重新读取校验，返回 null 表示全部成功，否则返回失败原因。
+     */
+    private suspend fun persistDoc(bookId: Long, doc: ParsedDocResult): String? {
         if (!doc.outline.isNullOrBlank()) {
             settingRepository.addOutline("AI导入大纲", doc.outline, bookId)
         }
@@ -920,18 +937,52 @@ class AiChatViewModel(
                 )
             }
         }
+        return verifyDocPersisted(bookId, doc)
+    }
+
+    /** 落库后回读校验，确认人物 / 世界观 / 大纲 / 自定义分类确实写入成功。 */
+    private suspend fun verifyDocPersisted(bookId: Long, doc: ParsedDocResult): String? {
+        if (!doc.hasAnyContent) return "解析结果为空，没有可写入的内容"
+        val characters = settingRepository.getByCategory(bookId, SettingCategories.CHARACTER)
+        val missingCharacters = doc.characters.count { ch ->
+            characters.none { it.title == ch.name.ifBlank { "未命名角色" } }
+        }
+        if (missingCharacters > 0) return "$missingCharacters 条人物设定未入库"
+        val world = settingRepository.getByCategory(bookId, SettingCategories.WORLD)
+        val missingWorld = doc.worldSettings.count { ws ->
+            val title = ws.title.ifBlank { "世界观设定" }
+            val displayTitle = if (ws.category.isNotBlank()) "[${ws.category}] $title" else title
+            world.none { it.title == displayTitle }
+        }
+        if (missingWorld > 0) return "$missingWorld 条世界观设定未入库"
+        if (!doc.outline.isNullOrBlank()) {
+            val outlines = settingRepository.getByCategory(bookId, SettingCategories.OUTLINE)
+            if (outlines.isEmpty()) return "大纲未入库"
+        }
+        doc.custom.forEach { (category, items) ->
+            val saved = settingRepository.getByCategory(bookId, category)
+            val missing = items.count { item ->
+                saved.none { it.title == item.title.ifBlank { category } }
+            }
+            if (missing > 0) return "$category 分类下 $missing 条内容未入库"
+        }
+        return null
     }
 
     private suspend fun createNovelFromDoc(sessionId: Long, title: String, doc: ParsedDocResult) {
         val novelId = novelRepository.createNovel(title, "由 AI 文档导入")
-        persistDoc(novelId, doc)
+        val error = persistDoc(novelId, doc)
         preferencesRepository.setActiveNovel(novelId)
         chatRepository.bindSessionBook(sessionId, novelId)
         _uiState.update { it.copy(selectedNovelId = novelId) }
         chatRepository.appendMessage(
             sessionId = sessionId,
             role = ChatRole.ASSISTANT,
-            content = buildCompleteNotice(title, doc)
+            content = if (error != null) {
+                "⚠️ 保存失败：$error。书稿《$title》已创建，请重新发送或手动补充设定。"
+            } else {
+                buildCompleteNotice(title, doc)
+            }
         )
     }
 
@@ -954,14 +1005,18 @@ class AiChatViewModel(
             if (createNew) {
                 createNovelFromDoc(sessionId, pending.title, pending.doc)
             } else {
-                persistDoc(pending.existingNovelId, pending.doc)
+                val error = persistDoc(pending.existingNovelId, pending.doc)
                 preferencesRepository.setActiveNovel(pending.existingNovelId)
                 chatRepository.bindSessionBook(sessionId, pending.existingNovelId)
                 _uiState.update { it.copy(selectedNovelId = pending.existingNovelId) }
                 chatRepository.appendMessage(
                     sessionId = sessionId,
                     role = ChatRole.ASSISTANT,
-                    content = "已打开书稿《${pending.title}》，解析内容已写入该书稿设定库"
+                    content = if (error != null) {
+                        "⚠️ 保存失败：$error。请重新发送或手动补充设定。"
+                    } else {
+                        "已打开书稿《${pending.title}》，解析内容已写入该书稿设定库（已校验入库）"
+                    }
                 )
             }
         }
@@ -1080,25 +1135,30 @@ class AiChatViewModel(
                         val chapterTitle = "AI生成章节_$stamp"
                         val chapterId = novelRepository.createChapter(novelId, chapterTitle)
                         novelRepository.saveChapter(chapterId, chapterTitle, content)
+                        // 回读校验，确保章节正文真实落库。
+                        novelRepository.getChapter(chapterId)?.content?.trim() == content.trim()
                     }
 
                     SaveTarget.OUTLINE -> {
+                        val title = "AI导入大纲_$stamp"
                         settingRepository.addOutline(
-                            title = "AI导入大纲_$stamp",
+                            title = title,
                             content = content,
                             bookId = novelId
                         )
+                        settingRepository.getByCategory(novelId, SettingCategories.OUTLINE)
+                            .any { it.title == title && it.content.trim() == content.trim() }
                     }
 
                     SaveTarget.MEMO -> {
-                        memoRepository.create(
-                            title = "AI备忘_$stamp",
-                            content = content,
-                            bookId = novelId
-                        )
+                        val title = "AI备忘_$stamp"
+                        val id = memoRepository.create(title = title, content = content, bookId = novelId)
+                        memoRepository.getNotes(novelId).any { it.id == id }
                     }
                 }
-            }.isSuccess
+            }.getOrDefault(false)
+            // 保存成功后把该书稿设为当前书稿，保证在书稿 / 设定库 / 备忘录中能直接看到。
+            if (success) preferencesRepository.setActiveNovel(novelId)
 
             val toast = when {
                 !success -> "保存失败，请重试"
