@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.FileDownload
@@ -58,6 +59,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wenshu.writing.di.AppContainer
 import com.wenshu.writing.domain.model.Novel
+import com.wenshu.writing.feature.intro.IntroGeneratorDialog
 import com.wenshu.writing.ui.components.ConfirmDeleteDialog
 import com.wenshu.writing.ui.components.CoverFiles
 import com.wenshu.writing.ui.components.CoverPreviewDialog
@@ -72,7 +74,8 @@ import kotlinx.coroutines.launch
 fun WorksScreen(
     container: AppContainer,
     onOpenNovel: (Long) -> Unit,
-    onOpenTrash: () -> Unit
+    onOpenTrash: () -> Unit,
+    onOpenChat: () -> Unit
 ) {
     val viewModel: WorksViewModel = viewModel(
         factory = WorksViewModel.factory(
@@ -87,6 +90,7 @@ fun WorksScreen(
 
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
     var novelToDelete by remember { mutableStateOf<Novel?>(null) }
+    var introNovel by remember { mutableStateOf<Novel?>(null) }
     var pendingExportNovel by remember { mutableStateOf<Novel?>(null) }
     var coverTargetNovelId by remember { mutableStateOf<Long?>(null) }
     var coverPreviewBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -208,7 +212,8 @@ fun WorksScreen(
                             CoverFiles.delete(novel.coverPath)
                             viewModel.setCover(novel.id, null)
                         },
-                        onDelete = { novelToDelete = novel }
+                        onDelete = { novelToDelete = novel },
+                        onGenerateIntro = { introNovel = novel }
                     )
                 }
             }
@@ -223,6 +228,18 @@ fun WorksScreen(
                     showCreateDialog = false
                     onOpenNovel(id)
                 }
+            }
+        )
+    }
+
+    introNovel?.let { novel ->
+        IntroGeneratorDialog(
+            container = container,
+            novel = novel,
+            onDismiss = { introNovel = null },
+            onOpenChat = {
+                introNovel = null
+                onOpenChat()
             }
         )
     }
@@ -279,7 +296,8 @@ private fun NovelCard(
     onExport: () -> Unit,
     onChangeCover: () -> Unit,
     onRemoveCover: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onGenerateIntro: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -335,6 +353,14 @@ private fun NovelCard(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false }
                 ) {
+                    DropdownMenuItem(
+                        text = { Text("生成简介") },
+                        leadingIcon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
+                        onClick = {
+                            menuExpanded = false
+                            onGenerateIntro()
+                        }
+                    )
                     DropdownMenuItem(
                         text = { Text("更换封面") },
                         onClick = {

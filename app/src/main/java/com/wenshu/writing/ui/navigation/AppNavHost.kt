@@ -133,6 +133,13 @@ fun AppNavHost(container: AppContainer) {
                         navController.navigate(Routes.WORKS_TRASH) {
                             launchSingleTop = true
                         }
+                    },
+                    onOpenChat = {
+                        navController.navigate(Routes.AI) {
+                            popUpTo(Routes.WORKS) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
                     }
                 )
             }

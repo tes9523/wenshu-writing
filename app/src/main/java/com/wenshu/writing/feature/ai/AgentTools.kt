@@ -197,14 +197,8 @@ class AgentToolExecutor(
                 finishWrite(bookId, "已写入 设定库/大纲（已校验入库）")
             }
             else -> {
-                writeProjectDoc(bookId, path, content)
-                val saved = settingRepository.getByCategory(bookId, CATEGORY_DOC)
-                    .firstOrNull { it.title == path }
-                if (saved == null || saved.content.trim() != content.trim()) {
-                    "写入失败：项目文档「$path」写入后校验未通过（库中未找到对应内容）"
-                } else {
-                    finishWrite(bookId, "已写入 $path（已校验入库）")
-                }
+                // 项目文档仅作为用户手动维护的自由文档容器，技能不再向其中主动写入。
+                "未识别的写入路径「$path」。技能仅允许写入：设定库/人物、设定库/世界观、设定库/大纲、设定库/章节摘要、章节内容/第X章.md，请勿创建其他文件。"
             }
         }
     }
@@ -499,12 +493,6 @@ class AgentToolExecutor(
         }
     }
 
-    private suspend fun writeProjectDoc(bookId: Long, path: String, content: String) {
-        val docs = settingRepository.getByCategory(bookId, CATEGORY_DOC)
-        docs.filter { it.title == path }.forEach { settingRepository.delete(it) }
-        settingRepository.addSetting(CATEGORY_DOC, path, content, bookId)
-    }
-
     // ---- 解析帮助 ----
 
     private fun parseCharacters(markdown: String): List<Setting> {
@@ -646,10 +634,14 @@ class AgentToolExecutor(
         }
         return when (stripped) {
             "设定库", "设定库/", "小说资料", "小说资料/", "目录" -> "小说资料"
-            "设定库/人物", "设定库/人物.md", "设定库/人物库", "设定库/人物库.md" -> "小说资料/人物库.md"
-            "设定库/世界观", "设定库/世界观.md" -> "小说资料/世界观.md"
-            "设定库/大纲", "设定库/大纲.md" -> "小说资料/大纲.md"
-            "设定库/章节摘要", "设定库/章节摘要.md" -> "小说资料/章节摘要.md"
+            "设定库/人物", "设定库/人物.md", "设定库/人物库", "设定库/人物库.md",
+            "人物", "人物.md", "人物库", "小说资料/人物库", "小说资料/人物" -> "小说资料/人物库.md"
+            "设定库/世界观", "设定库/世界观.md",
+            "世界观", "小说资料/世界观" -> "小说资料/世界观.md"
+            "设定库/大纲", "设定库/大纲.md",
+            "大纲", "小说资料/大纲" -> "小说资料/大纲.md"
+            "设定库/章节摘要", "设定库/章节摘要.md",
+            "章节摘要", "小说资料/章节摘要" -> "小说资料/章节摘要.md"
             else -> stripped
         }
     }

@@ -173,6 +173,21 @@ fun AiChatScreen(
         derivedStateOf { !listState.canScrollForward }
     }
 
+    /** 流式生成时是否自动跟随滚动到底部：用户上滑浏览历史时自动暂停。 */
+    var autoFollow by remember { mutableStateOf(true) }
+
+    // 根据用户手势维护自动跟随：滚动到底部→跟随；主动上滑→停止跟随，不强制下拉。
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.canScrollForward to listState.isScrollInProgress }
+            .collect { (canForward, scrolling) ->
+                autoFollow = when {
+                    !canForward -> true
+                    scrolling -> false
+                    else -> autoFollow
+                }
+            }
+    }
+
     /** 精确滚动到列表最底部：最后一条消息可能高于可视区，需要额外补一屏。 */
     suspend fun scrollToLatest() {
         val count = listState.layoutInfo.totalItemsCount
@@ -218,19 +233,25 @@ fun AiChatScreen(
         }
     }
 
-    LaunchedEffect(state.activeSessionId, state.messages, state.isSending, state.pendingQuestion) {
-        val itemCount = state.messages.size +
-            (if (state.messages.isEmpty()) 1 else 0) +
-            (if (state.isSending) 1 else 0) +
-            (if (state.pendingQuestion != null) 1 else 0)
-        if (itemCount == 0) return@LaunchedEffect
-        if (restoreScrollPending) return@LaunchedEffect
-        val switchedSession = lastSessionId != state.activeSessionId
+    // 切换会话：消息流切换后多次兜底滚动，确保定位到目标会话底部（最新内容）。
+    LaunchedEffect(state.activeSessionId) {
+        if (lastSessionId == state.activeSessionId) return@LaunchedEffect
         lastSessionId = state.activeSessionId
-        // 切换会话时直接定位最新消息；停留在底部时才跟随新消息，避免打断向上翻阅历史。
-        if (switchedSession || isAtBottom) {
+        if (restoreScrollPending) return@LaunchedEffect
+        autoFollow = true
+        kotlinx.coroutines.delay(50)
+        repeat(8) {
             scrollToLatest()
+            if (!listState.canScrollForward) return@LaunchedEffect
+            kotlinx.coroutines.delay(60)
         }
+    }
+
+    // 新消息 / 流式输出 / 提问卡片更新：仅在自动跟随开启时滚到底部。
+    LaunchedEffect(state.messages, state.isSending, state.pendingQuestion, state.streamingText) {
+        if (restoreScrollPending) return@LaunchedEffect
+        if (!autoFollow) return@LaunchedEffect
+        scrollToLatest()
     }
 
     val activeSession = state.sessions.firstOrNull { it.id == state.activeSessionId }
@@ -475,14 +496,17 @@ fun AiChatScreen(
 
                     if (!isAtBottom) {
                         Surface(
-                            onClick = { scope.launch { scrollToLatest() } },
+                            onClick = {
+                                autoFollow = true
+                                scope.launch { scrollToLatest() }
+                            },
                             shape = CircleShape,
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             tonalElevation = 3.dp,
                             shadowElevation = 2.dp,
                             modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 10.dp)
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 12.dp, bottom = 10.dp)
                                 .size(40.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
@@ -1143,15 +1167,16 @@ private fun MessageAction(
     enabled: Boolean = true,
     onClick: () -> Unit
 ) {
+    // 统一 40dp 触控区域，避免小按钮在部分机型上难以点中。
     IconButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.size(36.dp)
+        modifier = Modifier.size(40.dp)
     ) {
         Icon(
             icon,
             contentDescription = null,
-            modifier = Modifier.size(16.dp),
+            modifier = Modifier.size(18.dp),
             tint = if (enabled) {
                 MaterialTheme.colorScheme.onSurfaceVariant
             } else {

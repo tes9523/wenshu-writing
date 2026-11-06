@@ -498,6 +498,21 @@ class AiChatViewModel(
         }
     }
 
+    /**
+     * 将外部生成器（简介生成器等）的结果写入当前 AI 会话：
+     * 追加一条用户侧摘要消息与一条 AI 结果消息，无会话时自动新建。
+     */
+    fun injectGeneratedContent(userSummary: String, assistantContent: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val sid = ensureSession(userSummary)
+            chatRepository.appendMessage(sid, ChatRole.USER, userSummary)
+            chatRepository.appendMessage(sid, ChatRole.ASSISTANT, assistantContent)
+        }
+    }
+
+    /** 供生成器类功能复用的联网搜索（如简介仿写参考热门简介）。 */
+    suspend fun searchWebReference(query: String): String = searchWeb(query).first
+
     /** 立即终止当前 AI 请求（含联网搜索、工具执行与 Agent 循环）。 */
     fun stopGeneration() {
         pendingQuestionDeferred?.complete("用户已停止当前技能流程")
