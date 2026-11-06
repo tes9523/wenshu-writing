@@ -3,6 +3,7 @@ package com.wenshu.writing.feature.ai
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import android.content.Context
 import com.wenshu.writing.data.remote.AgentMessage
 import com.wenshu.writing.data.remote.AiClient
 import com.wenshu.writing.data.repository.ChatRepository
@@ -20,6 +21,8 @@ import com.wenshu.writing.domain.model.ChatSession
 import com.wenshu.writing.domain.model.Novel
 import com.wenshu.writing.domain.model.SettingCategories
 import com.wenshu.writing.domain.model.Skill
+import com.wenshu.writing.service.AiGenerationService
+import com.wenshu.writing.ui.util.BackgroundPermissions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +30,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -136,11 +140,14 @@ data class AiChatUiState(
     val pendingQuestion: PendingQuestion? = null,
     /** Skill 执行调试日志开关（沿用 1.0.7 的调试能力）。 */
     val skillLogEnabled: Boolean = false,
-    val skillLogs: List<String> = emptyList()
+    val skillLogs: List<String> = emptyList(),
+    /** 首次长耗时生成时弹出的后台保活引导。 */
+    val showBackgroundGuide: Boolean = false
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AiChatViewModel(
+    private val context: Context,
     private val preferencesRepository: PreferencesRepository,
     private val novelRepository: NovelRepository,
     private val skillRepository: SkillRepository,
@@ -153,6 +160,9 @@ class AiChatViewModel(
 
     /** 当前 AI 请求的 Job，用于"停止生成"按钮立即中断。 */
     private var requestJob: Job? = null
+
+    /** 长耗时生成的后台引导计时器。 */
+    private var guideJob: Job? = null
 
     /** 技能 question 工具等待用户回答的挂起点。 */
     private var pendingQuestionDeferred: CompletableDeferred<String>? = null
@@ -390,6 +400,29 @@ class AiChatViewModel(
         }
     }
 
+    /**
+     * 生成开始：启动前台服务展示常驻通知；首次长耗时（>8 秒）生成时提示后台保活引导。
+     */
+    private fun beginGeneration() {
+        AiGenerationService.start(context)
+        guideJob?.cancel()
+        if (BackgroundGuideStore.hasShown(context)) return
+        guideJob = viewModelScope.launch {
+            delay(8_000)
+            if (_uiState.value.isSending && !BackgroundGuideStore.hasShown(context)) {
+                _uiState.update { it.copy(showBackgroundGuide = true) }
+            }
+        }
+    }
+
+    /** 用户关闭后台引导弹窗后不再主动弹出。 */
+    fun dismissBackgroundGuide() {
+        BackgroundGuideStore.markShown(context)
+        guideJob?.cancel()
+        guideJob = null
+        _uiState.update { it.copy(showBackgroundGuide = false) }
+    }
+
     fun sendMessage() {
         val state = _uiState.value
         val text = state.input.trim()
@@ -420,6 +453,7 @@ class AiChatViewModel(
         }
 
         val config = state.config()
+        beginGeneration()
         requestJob = viewModelScope.launch(Dispatchers.IO) {
             var sessionId: Long? = null
             try {
@@ -470,7 +504,9 @@ class AiChatViewModel(
         pendingQuestionDeferred = null
         _uiState.update { it.copy(pendingQuestion = null) }
         requestJob?.cancel()
-        requestJob = null
+        AiGenerationService.stop(context)
+        guideJob?.cancel()
+        guideJob = null
         _uiState.update {
             it.copy(
                 isSending = false,
@@ -678,6 +714,9 @@ class AiChatViewModel(
     }
 
     private fun finishGeneration() {
+        AiGenerationService.stop(context)
+        guideJob?.cancel()
+        guideJob = null
         _uiState.update {
             it.copy(
                 isSending = false,
@@ -1098,6 +1137,7 @@ class AiChatViewModel(
             return
         }
         requestJob?.cancel()
+        beginGeneration()
         _uiState.update {
             it.copy(
                 isSending = true,
@@ -1403,6 +1443,7 @@ C. 其他情况（普通问答、闲聊、片段写作、Skill 制作与调试�
         }
 
         fun factory(
+            context: Context,
             preferencesRepository: PreferencesRepository,
             novelRepository: NovelRepository,
             skillRepository: SkillRepository,
@@ -1415,6 +1456,7 @@ C. 其他情况（普通问答、闲聊、片段写作、Skill 制作与调试�
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
                 AiChatViewModel(
+                    context,
                     preferencesRepository,
                     novelRepository,
                     skillRepository,
@@ -1425,5 +1467,21 @@ C. 其他情况（普通问答、闲聊、片段写作、Skill 制作与调试�
                     aiClient
                 ) as T
         }
+    }
+}
+
+/** 记录「后台保活引导」是否已经展示过，只弹一次。 */
+private object BackgroundGuideStore {
+    private const val PREFS = "background_guide"
+    private const val KEY_SHOWN = "shown"
+
+    fun hasShown(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_SHOWN, false)
+
+    fun markShown(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_SHOWN, true)
+            .apply()
     }
 }

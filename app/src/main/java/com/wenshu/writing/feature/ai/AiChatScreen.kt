@@ -528,6 +528,10 @@ fun AiChatScreen(
         )
     }
 
+    if (state.showBackgroundGuide) {
+        BackgroundKeepAliveDialog(onDismiss = { viewModel.dismissBackgroundGuide() })
+    }
+
     if (showBindBookDialog) {
         AlertDialog(
             onDismissRequest = { showBindBookDialog = false },

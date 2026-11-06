@@ -243,7 +243,7 @@ fun SettingsScreen(
                             Text("文枢写作", style = MaterialTheme.typography.titleSmall)
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                "版本 1.1.4 · 本地优先的长篇小说写作工具",
+                                "版本 1.1.5 · 本地优先的长篇小说写作工具",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

@@ -36,6 +36,17 @@ data class UpdateNote(
 /** 历史更新公告（按版本倒序排列）。 */
 val UPDATE_NOTES: List<UpdateNote> = listOf(
     UpdateNote(
+        version = "1.1.5",
+        title = "全新内置写作技能 · 后台保活 · 状态通知",
+        highlights = listOf(
+            "内置写作技能升级为 novel-writer-manager，支持章节创作、文档同步与项目初始化三种模式",
+            "工具链适配新技能：设定库/人物、世界观、大纲、章节摘要可直接读写",
+            "新增后台保活权限引导：通知权限、忽略电池优化、自启动，仅用于 AI 持续生成",
+            "AI 思考 / 生成期间展示通知栏常驻状态，点击可直接返回当前对话",
+            "生成完成、主动停止或中断后通知自动消失"
+        )
+    ),
+    UpdateNote(
         version = "1.1.4",
         title = "书稿回收站 · 脑洞生成器 · 分类修复",
         highlights = listOf(

@@ -1,5 +1,6 @@
 package com.wenshu.writing
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -16,6 +17,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.wenshu.writing.domain.model.AppSettings
+import com.wenshu.writing.service.AiGenerationService
 import com.wenshu.writing.ui.components.CoverFiles
 import com.wenshu.writing.ui.navigation.AppNavHost
 import com.wenshu.writing.ui.theme.WenShuTheme
@@ -27,6 +29,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         val container = (application as WenShuApplication).container
+        handleOpenChatIntent(intent)
 
         setContent {
             val settings by container.preferencesRepository.settings.collectAsStateWithLifecycle(
@@ -46,6 +49,19 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleOpenChatIntent(intent)
+    }
+
+    /** 通知栏点击「返回对话」：交给 AppNavHost 切回 AI 会话页。 */
+    private fun handleOpenChatIntent(intent: Intent?) {
+        if (intent?.action != AiGenerationService.ACTION_OPEN_CHAT) return
+        (application as WenShuApplication).container.requestOpenChat()
+        intent.action = null
     }
 }
 

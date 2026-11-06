@@ -25,7 +25,7 @@ class SkillRepository(
 
     /**
      * 1.0.8 起内置技能完全由 assets/skills 决定：
-     * - 删除 assets 中已不存在的旧内置技能（如旧版 novel-writer / skill-creator / 流水线）；
+     * - 删除 assets 中已不存在的旧内置技能（如旧版 novel-writer）；
      * - 已存在的同名内置技能覆盖为最新内容（保留用户的启用/停用状态）；
      * - 用户自定义技能与导入技能不受影响。
      */

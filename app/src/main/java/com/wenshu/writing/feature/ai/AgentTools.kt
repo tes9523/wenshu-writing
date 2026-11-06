@@ -34,7 +34,7 @@ data class PendingQuestion(
 )
 
 /**
- * 本地工具集：把 novel-writer / skill-creator 需要的工具映射到 App 内的书稿、设定、章节与技能数据。
+ * 本地工具集：把 novel-writer-manager / skill-creator 需要的工具映射到 App 内的书稿、设定、章节与技能数据。
  * 所有文件路径都是"项目虚拟文件"，例如 小说资料/人物库.md、章节内容/第1章.md。
  */
 class AgentToolExecutor(
@@ -141,6 +141,7 @@ class AgentToolExecutor(
             path == "小说资料/人物库.md" || path == "人物库.md" -> readCharacters(bookId)
             path == "小说资料/世界观.md" || path == "世界观.md" -> readWorld(bookId)
             path == "小说资料/章节摘要.md" || path == "章节摘要.md" -> readSummaries(bookId)
+            path == "小说资料/大纲.md" || path == "大纲.md" -> readOutline(bookId)
             path == "章节内容" || path == "章节内容/" -> listChapters(bookId)
             path == "小说资料" || path == "小说资料/" -> listDocs(bookId)
             path.startsWith("章节内容/") -> readChapter(bookId, path)
@@ -186,6 +187,15 @@ class AgentToolExecutor(
                 finishWrite(bookId, "已写入 小说资料/章节摘要.md（已校验入库）")
             }
             path.startsWith("章节内容/") -> writeChapter(bookId, path, content)
+            path == "小说资料/大纲.md" || path == "大纲.md" -> {
+                val items = listOf(
+                    Setting(category = SettingCategories.OUTLINE, title = "大纲", content = content)
+                )
+                replaceCategory(bookId, SettingCategories.OUTLINE, items)
+                val error = verifyCategory(bookId, SettingCategories.OUTLINE, items)
+                if (error != null) return error
+                finishWrite(bookId, "已写入 设定库/大纲（已校验入库）")
+            }
             else -> {
                 writeProjectDoc(bookId, path, content)
                 val saved = settingRepository.getByCategory(bookId, CATEGORY_DOC)
@@ -397,6 +407,12 @@ class AgentToolExecutor(
         return items.firstOrNull()?.content ?: "章节摘要为空。"
     }
 
+    private suspend fun readOutline(bookId: Long): String {
+        val items = settingRepository.getByCategory(bookId, SettingCategories.OUTLINE)
+        if (items.isEmpty()) return "大纲为空。"
+        return items.joinToString("\n\n") { it.content }
+    }
+
     private suspend fun listChapters(bookId: Long): String {
         val chapters = novelRepository.getChapters(bookId)
         if (chapters.isEmpty()) return "章节内容/ 目录为空，还没有章节文件。"
@@ -416,9 +432,10 @@ class AgentToolExecutor(
         val docs = settingRepository.getByCategory(bookId, CATEGORY_DOC)
         return buildString {
             appendLine("小说资料/ 目录：")
-            appendLine("- 小说资料/人物库.md")
-            appendLine("- 小说资料/世界观.md")
-            appendLine("- 小说资料/章节摘要.md")
+            appendLine("- 小说资料/人物库.md（设定库/人物）")
+            appendLine("- 小说资料/世界观.md（设定库/世界观）")
+            appendLine("- 小说资料/大纲.md（设定库/大纲）")
+            appendLine("- 小说资料/章节摘要.md（设定库/章节摘要）")
             docs.forEach { appendLine("- ${it.title}") }
         }
     }
@@ -613,10 +630,29 @@ class AgentToolExecutor(
         return "$short.md"
     }
 
-    private fun normalizePath(path: String): String = path.trim()
-        .replace('\\', '/')
-        .removePrefix("./")
-        .trim('/')
+    /**
+     * 统一文件路径。兼容 novel-writer-manager 使用的「设定库/人物」等别名，
+     * 并支持「目录 小说资料」「目录/章节内容」这类目录写法。
+     */
+    private fun normalizePath(path: String): String {
+        val cleaned = path.trim()
+            .replace('\\', '/')
+            .removePrefix("./")
+            .trim('/')
+        val stripped = when {
+            cleaned.startsWith("目录/") -> cleaned.removePrefix("目录/")
+            cleaned.startsWith("目录 ") -> cleaned.removePrefix("目录 ").trim('/')
+            else -> cleaned
+        }
+        return when (stripped) {
+            "设定库", "设定库/", "小说资料", "小说资料/", "目录" -> "小说资料"
+            "设定库/人物", "设定库/人物.md", "设定库/人物库", "设定库/人物库.md" -> "小说资料/人物库.md"
+            "设定库/世界观", "设定库/世界观.md" -> "小说资料/世界观.md"
+            "设定库/大纲", "设定库/大纲.md" -> "小说资料/大纲.md"
+            "设定库/章节摘要", "设定库/章节摘要.md" -> "小说资料/章节摘要.md"
+            else -> stripped
+        }
+    }
 
     private fun JsonObject.stringOf(vararg keys: String): String {
         keys.forEach { key ->
@@ -656,7 +692,7 @@ class AgentToolExecutor(
             )
             add(AgentToolSpec(
                 name = "file_read",
-                description = "读取当前书稿的项目文件。path 可为 小说资料/人物库.md、小说资料/世界观.md、小说资料/章节摘要.md、章节内容/第X章.md，或目录 章节内容 / 小说资料。也可读取技能配套文件 references/xxx.md。",
+                description = "读取当前书稿的项目文件。path 可为 设定库/人物、设定库/世界观、设定库/大纲、设定库/章节摘要（等价于 小说资料/人物库.md 等），或 章节内容/第X章.md、目录 章节内容 / 小说资料。也可读取技能配套文件 references/xxx.md。",
                 parameters = buildJsonObject {
                     put("type", "object")
                     putJsonObject("properties") {
@@ -670,7 +706,7 @@ class AgentToolExecutor(
             ))
             add(AgentToolSpec(
                 name = "file_write",
-                description = "写入当前书稿的项目文件。人物库/世界观/章节摘要会同步到设定库，章节内容/第X章.md 会创建或更新章节。",
+                description = "写入当前书稿的项目文件。设定库/人物、设定库/世界观、设定库/大纲、设定库/章节摘要会同步到设定库，章节内容/第X章.md 会创建或更新章节。",
                 parameters = buildJsonObject {
                     put("type", "object")
                     putJsonObject("properties") {

@@ -11,6 +11,8 @@ import com.wenshu.writing.data.repository.PreferencesRepository
 import com.wenshu.writing.data.repository.SettingRepository
 import com.wenshu.writing.data.repository.SkillRepository
 import com.wenshu.writing.feature.ai.AiChatViewModel
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
 /**
  * 轻量依赖容器。后续接入 Hilt 或拆分模块时，只需替换此处的装配逻辑。
@@ -19,6 +21,24 @@ class AppContainer(context: Context) {
 
     private val appContext = context.applicationContext
     private val database: AppDatabase = AppDatabase.getInstance(appContext)
+
+    /** 通知栏点击「返回对话」时发出的跳转请求；AppNavHost 订阅后切到 AI 会话页。 */
+    private val _openChatRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
+    val openChatRequests = _openChatRequests.asSharedFlow()
+
+    /** 冷启动时 Notification 先于界面就绪，用标记位补一次跳转。 */
+    private var pendingOpenChat = false
+
+    fun requestOpenChat() {
+        pendingOpenChat = true
+        _openChatRequests.tryEmit(Unit)
+    }
+
+    fun consumePendingOpenChat(): Boolean {
+        val value = pendingOpenChat
+        pendingOpenChat = false
+        return value
+    }
 
     val novelRepository = NovelRepository(
         novelDao = database.novelDao(),
@@ -61,6 +81,7 @@ class AppContainer(context: Context) {
      */
     val aiChatViewModel: AiChatViewModel by lazy {
         AiChatViewModel(
+            context = appContext,
             preferencesRepository = preferencesRepository,
             novelRepository = novelRepository,
             skillRepository = skillRepository,

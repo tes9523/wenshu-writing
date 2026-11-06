@@ -62,6 +62,29 @@ fun AppNavHost(container: AppContainer) {
     val imeVisible = WindowInsets.isImeVisible
     val showBottomBar = topLevelDestinations.any { it.route == currentRoute } && !imeVisible
 
+    // 点击通知栏「返回对话」→ 切回 AI 会话页（保留各 Tab 状态）。
+    // 冷启动时需等启动页结束、导航图就绪后再跳转。
+    val openChatPage: () -> Unit = {
+        navController.navigate(Routes.AI) {
+            popUpTo(Routes.WORKS) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+    LaunchedEffect(Unit) {
+        container.openChatRequests.collect {
+            if (navController.currentDestination?.route != Routes.SPLASH) {
+                container.consumePendingOpenChat()
+                openChatPage()
+            }
+        }
+    }
+    LaunchedEffect(currentRoute) {
+        if (currentRoute != null && currentRoute != Routes.SPLASH && container.consumePendingOpenChat()) {
+            openChatPage()
+        }
+    }
+
     // 版本更新公告：同一版本首次打开时自动弹出一次，重装或升级后重新弹出。
     val context = LocalContext.current
     var updateNote by remember { mutableStateOf<UpdateNote?>(null) }
