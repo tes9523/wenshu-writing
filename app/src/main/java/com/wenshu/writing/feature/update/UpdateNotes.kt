@@ -36,6 +36,18 @@ data class UpdateNote(
 /** 历史更新公告（按版本倒序排列）。 */
 val UPDATE_NOTES: List<UpdateNote> = listOf(
     UpdateNote(
+        version = "1.1.8",
+        title = "长消息按钮修复 · 新书智能识别 · 外部存储目录",
+        highlights = listOf(
+            "超长消息只渲染预览，全文在独立弹窗按分片懒加载，复制/保存/删除/重新生成始终可点",
+            "skill 未主动建稿时，自动识别书名+章节正文/完整设定，弹窗询问是否创建书稿",
+            "脑洞、简介、备忘录与普通问答不会触发识别；skill 主动建稿流程保持不变",
+            "新增外部存储目录 /wenshu（books / setting / memo / skill），导出文件统一 UTF-8 写入",
+            "首次使用引导存储权限，拒绝后回落仅本地数据库存储，不影响写作",
+            "技能工具轮次默认 15 轮，重复调用同一工具+参数 3 次自动拦截，避免死循环"
+        )
+    ),
+    UpdateNote(
         version = "1.1.7",
         title = "长消息优化 · 交互式提问 · 轮次可配置",
         highlights = listOf(

@@ -42,7 +42,7 @@ import com.wenshu.writing.data.local.entity.SkillEntity
         ChapterTaskEntity::class,
         PipelineRunEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -286,6 +286,15 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** 1.1.7 -> 1.1.8：技能工具调用轮次默认值调整为 15，仅升级仍为默认值 10 的用户。 */
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "UPDATE `app_settings` SET `maxAgentTurns` = 15 WHERE `maxAgentTurns` = 10"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -302,7 +311,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_6_7,
                         MIGRATION_7_8,
                         MIGRATION_8_9,
-                        MIGRATION_9_10
+                        MIGRATION_9_10,
+                        MIGRATION_10_11
                     )
                     .build()
                     .also { instance = it }

@@ -1,5 +1,6 @@
 package com.wenshu.writing.feature.works
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -10,6 +11,7 @@ import com.wenshu.writing.data.repository.PreferencesRepository
 import com.wenshu.writing.data.repository.SettingRepository
 import com.wenshu.writing.domain.model.Chapter
 import com.wenshu.writing.domain.model.Novel
+import com.wenshu.writing.ui.util.ExternalStorage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +21,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 
@@ -83,6 +87,35 @@ class WorksViewModel(
                     val settings = settingRepository.getAll(novelId)
                     val memos = memoRepository.getNotes(novelId)
                     BookArchive.write(output, novel, chapters, settings, memos)
+                }
+            }
+            onResult(result)
+        }
+    }
+
+    /** 导出到外部存储 wenshu/books，返回最终文件路径。 */
+    fun exportBookToExternal(
+        context: Context,
+        novelId: Long,
+        onResult: (Result<String>) -> Unit
+    ) {
+        viewModelScope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    val novel = repository.getNovel(novelId)
+                        ?: throw IllegalArgumentException("书稿不存在")
+                    val chapters = repository.observeChapters(novelId).first()
+                    val settings = settingRepository.getAll(novelId)
+                    val memos = memoRepository.getNotes(novelId)
+                    val buffer = ByteArrayOutputStream()
+                    BookArchive.write(buffer, novel, chapters, settings, memos)
+                    val file = ExternalStorage.saveBytes(
+                        context = context,
+                        category = ExternalStorage.Category.BOOKS,
+                        fileName = "${ExternalStorage.sanitizeFileName(novel.title)}.wenshu.zip",
+                        bytes = buffer.toByteArray()
+                    ) ?: throw IOException("写入 wenshu/books 失败，请检查存储权限")
+                    file.absolutePath
                 }
             }
             onResult(result)

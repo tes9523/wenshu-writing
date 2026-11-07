@@ -192,7 +192,9 @@ fun SettingsScreen(
                         Text("本地存储", style = MaterialTheme.typography.titleSmall)
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "书稿、章节、人物卡、世界观设定与备忘录均保存在本机数据库；卸载应用会清除全部数据。",
+                            "书稿、章节、人物卡、世界观设定与备忘录均保存在本机数据库；" +
+                                "导出文件写入存储根目录 /wenshu 下的 books、setting、memo、skill 子目录（UTF-8）。" +
+                                "卸载应用会清除数据库内容。",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -289,7 +291,7 @@ fun SettingsScreen(
                             Text("文枢写作", style = MaterialTheme.typography.titleSmall)
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                "版本 1.1.7 · 本地优先的长篇小说写作工具",
+                                "版本 1.1.8 · 本地优先的长篇小说写作工具",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

@@ -29,7 +29,7 @@ class PreferencesRepository(
             soundType = entity?.soundType ?: "notification",
             fontName = entity?.fontName ?: "system",
             chatFontSize = entity?.chatFontSize ?: 14,
-            maxAgentTurns = entity?.maxAgentTurns ?: 10
+            maxAgentTurns = entity?.maxAgentTurns ?: 15
         )
     }
 

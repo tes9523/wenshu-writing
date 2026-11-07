@@ -1,5 +1,6 @@
 package com.wenshu.writing.feature.memo
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -36,9 +38,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,7 +52,12 @@ import com.wenshu.writing.domain.model.MemoNote
 import com.wenshu.writing.domain.model.Novel
 import com.wenshu.writing.ui.components.ConfirmDeleteDialog
 import com.wenshu.writing.ui.components.EmptyState
+import com.wenshu.writing.ui.components.StoragePermissionDialog
+import com.wenshu.writing.ui.util.ExternalStorage
 import com.wenshu.writing.ui.util.formatShortTimestamp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,12 +75,67 @@ fun MemoScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val notes = state.notes
     var noteToDelete by remember { mutableStateOf<MemoNote?>(null) }
+    var showStorageDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    fun exportMemosToWenshuDir() {
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    val all = container.memoRepository.getNotes(state.activeBookId)
+                    if (all.isEmpty()) throw IllegalStateException("当前没有可导出的备忘录")
+                    val markdown = buildString {
+                        val bookName = state.novels.firstOrNull { it.id == state.activeBookId }?.title
+                        appendLine("# 备忘录${if (bookName != null) " · 《$bookName》" else ""}")
+                        appendLine()
+                        all.forEach { note ->
+                            appendLine("## ${note.displayTitle}")
+                            appendLine()
+                            if (note.content.isNotBlank()) {
+                                appendLine(note.content.trim())
+                                appendLine()
+                            }
+                        }
+                    }
+                    val bookName = state.novels.firstOrNull { it.id == state.activeBookId }?.title ?: "全局"
+                    ExternalStorage.saveText(
+                        context = context,
+                        category = ExternalStorage.Category.MEMO,
+                        fileName = "备忘录_${ExternalStorage.sanitizeFileName(bookName)}_" +
+                            "${ExternalStorage.signedName()}.md",
+                        content = markdown
+                    ) ?: throw IllegalStateException("写入 wenshu/memo 失败，请检查存储权限")
+                }
+            }
+            result.onSuccess { file ->
+                Toast.makeText(context, "已导出到 ${file.absolutePath}", Toast.LENGTH_LONG).show()
+            }.onFailure { error ->
+                Toast.makeText(context, "导出失败：${error.message ?: "未知错误"}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     Scaffold(
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         topBar = {
             Column {
-                TopAppBar(title = { Text("备忘录", style = MaterialTheme.typography.titleLarge) })
+                TopAppBar(
+                    title = { Text("备忘录", style = MaterialTheme.typography.titleLarge) },
+                    actions = {
+                        IconButton(
+                            onClick = {
+                                if (ExternalStorage.isReady(context)) {
+                                    exportMemosToWenshuDir()
+                                } else {
+                                    showStorageDialog = true
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Outlined.FileDownload, contentDescription = "导出备忘录")
+                        }
+                    }
+                )
                 BookSelectorBar(
                     novels = state.novels,
                     activeBookId = state.activeBookId,
@@ -126,6 +190,13 @@ fun MemoScreen(
                 }
             }
         }
+    }
+
+    if (showStorageDialog) {
+        StoragePermissionDialog(
+            onDismiss = { showStorageDialog = false },
+            onGranted = { exportMemosToWenshuDir() }
+        )
     }
 
     noteToDelete?.let { note ->

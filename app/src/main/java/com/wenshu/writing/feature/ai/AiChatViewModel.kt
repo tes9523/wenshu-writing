@@ -93,6 +93,21 @@ data class PendingDocImport(
     val existingNovelId: Long
 )
 
+/** 智能识别出的新书草稿：用户确认后才会真正创建书稿。 */
+data class DetectedNovelDraft(
+    val title: String,
+    val genre: String = "",
+    val preview: String = "",
+    /** 已按「第X章 / Chapter N」拆分好的章节；为空表示只有完整设定。 */
+    val chapters: List<ParsedChapter> = emptyList(),
+    /** 原文，完整设定类内容会写入设定库【大纲】。 */
+    val body: String = "",
+    /** 触发识别的会话，确认建稿后把内容落回该会话。 */
+    val sessionId: Long = 0L
+)
+
+data class ParsedChapter(val title: String, val content: String)
+
 data class AiChatUiState(
     val providerName: String? = null,
     val baseUrl: String = "",
@@ -144,7 +159,9 @@ data class AiChatUiState(
     /** 首次长耗时生成时弹出的后台保活引导。 */
     val showBackgroundGuide: Boolean = false,
     /** 技能单轮最大工具调用轮次（开发者可配置）。 */
-    val maxAgentTurns: Int = 10
+    val maxAgentTurns: Int = 15,
+    /** 智能识别到的新书内容，等待用户确认是否创建书稿。 */
+    val pendingNovelDraft: DetectedNovelDraft? = null
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -174,6 +191,9 @@ class AiChatViewModel(
 
     /** 已提前渲染的提问内容，避免流式参数重复刷新卡片。 */
     private var earlyQuestionShownText: String = ""
+
+    /** 本轮是否已通过技能 create_project 直接创建书稿，避免智能识别重复建稿。 */
+    private var bookToolUsedThisRun: Boolean = false
 
     /** 离开对话页时记下的滚动位置，回到页面后据此恢复，避免被重置到顶部或底部。 */
     var savedScrollIndex: Int = 0
@@ -449,6 +469,7 @@ class AiChatViewModel(
         earlyQuestionAnswer = null
         earlyQuestionShownText = ""
         pendingQuestionDeferred = null
+        bookToolUsedThisRun = false
         _uiState.update {
             it.copy(
                 input = "",
@@ -616,7 +637,13 @@ class AiChatViewModel(
         appendAgentLog("开始 Agent 循环：绑定书稿=${_uiState.value.activeSessionBookId}，工具=${tools.joinToString { it.name }}")
 
         // 轮次上限来自设置（开发者可配置），不再硬编码。
+        // 计数规则：一轮 = 一次模型请求；同一轮并行调用多个工具仍只计 1 轮。
         val maxTurns = _uiState.value.maxAgentTurns.coerceIn(1, 100)
+
+        // 防死循环兜底：连续 3 次完全相同的工具 + 参数，自动拦截并提示。
+        var lastToolSignature: String? = null
+        var sameToolRepeat = 0
+        var loopGuardNotified = false
 
         repeat(maxTurns) { turnIndex ->
             currentCoroutineContext().ensureActive()
@@ -679,9 +706,38 @@ class AiChatViewModel(
 
             turn.toolCalls.forEach { call ->
                 currentCoroutineContext().ensureActive()
+                val signature = call.name + "|" + call.arguments.trim()
+                if (signature == lastToolSignature) {
+                    sameToolRepeat++
+                } else {
+                    lastToolSignature = signature
+                    sameToolRepeat = 1
+                }
+                if (sameToolRepeat >= 3) {
+                    appendAgentLog("拦截重复工具调用：${call.name}")
+                    val notice = "检测到连续 3 次调用相同工具（${call.name}）且参数完全一致，" +
+                        "已自动拦截以避免死循环。请调整思路后重试，或补充说明后再继续。"
+                    messages.add(AgentMessage("tool", notice, toolCallId = call.id))
+                    if (!loopGuardNotified) {
+                        loopGuardNotified = true
+                        chatRepository.appendMessage(
+                            sessionId = sessionId,
+                            role = ChatRole.ASSISTANT,
+                            content = "⚠️ $notice"
+                        )
+                    }
+                    return@forEach
+                }
                 _uiState.update { it.copy(activeToolName = call.name) }
                 val result = executor.execute(call)
                 appendAgentLog("工具返回 ${call.name}：${result.take(300)}")
+                // 记录本轮技能是否已直接建书，避免智能识别重复创建。
+                if (call.name == "create_project" &&
+                    !result.startsWith("创建失败") &&
+                    !result.contains("不允许创建书稿")
+                ) {
+                    bookToolUsedThisRun = true
+                }
                 // 写库失败时在对话中明确提示，避免只显示模型给出的「已保存」话术误导用户。
                 if (result.startsWith("写入失败") || result.startsWith("创建失败")) {
                     chatRepository.appendMessage(
@@ -994,7 +1050,12 @@ class AiChatViewModel(
             return
         }
 
-        val doc = extracted.doc ?: return
+        val doc = extracted.doc
+        if (doc == null) {
+            // skill 未显式创建书稿时，尝试从输出中智能识别新书/正文内容，交由用户确认。
+            suggestNovelDraft(sessionId, extracted.text.ifBlank { rawReply })
+            return
+        }
         if (userText.isBlank()) return
 
         val explicitCreate = isExplicitBookCreation(userText)
@@ -1051,6 +1112,68 @@ class AiChatViewModel(
                 )
             }
         }
+    }
+
+    /**
+     * 智能识别新书内容：skill 未显式建档时，若输出包含书名且具备章节正文或完整设定结构，
+     * 弹轻量确认提示；脑洞、简介、分析资料、问答不会触发。
+     */
+    private fun suggestNovelDraft(sessionId: Long, text: String) {
+        if (bookToolUsedThisRun) return
+        if (_uiState.value.pendingNovelDraft != null) return
+        val draft = detectNovelDraft(text)?.copy(sessionId = sessionId) ?: return
+        // 内容与当前已绑定书稿同名，说明是在续写已有书稿，不再重复建稿。
+        val boundTitle = _uiState.value.activeSessionBookId
+            ?.let { id -> _uiState.value.novels.firstOrNull { it.id == id }?.title }
+        if (boundTitle != null && boundTitle == draft.title) return
+        appendAgentLog("智能识别到新书内容：《${draft.title}》，等待用户确认")
+        _uiState.update { it.copy(pendingNovelDraft = draft) }
+    }
+
+    /** 用户确认：创建书稿并把识别到的内容写入书稿。 */
+    fun confirmNovelDraft() {
+        val draft = _uiState.value.pendingNovelDraft ?: return
+        val sessionId = draft.sessionId.takeIf { it > 0L }
+            ?: _uiState.value.activeSessionId ?: return
+        _uiState.update { it.copy(pendingNovelDraft = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val existing = novelRepository.findNovelByTitle(draft.title)
+            val novelId = existing?.id
+                ?: novelRepository.createNovel(
+                    draft.title,
+                    draft.genre.ifBlank { "由 AI 内容智能识别创建" }
+                )
+            if (draft.chapters.isNotEmpty()) {
+                draft.chapters.forEach { chapter ->
+                    val id = novelRepository.createChapter(novelId, chapter.title)
+                    novelRepository.saveChapter(id, chapter.title, chapter.content)
+                }
+            } else {
+                settingRepository.addOutline("AI识别大纲", draft.body, novelId)
+            }
+            preferencesRepository.setActiveNovel(novelId)
+            chatRepository.bindSessionBook(sessionId, novelId)
+            _uiState.update { it.copy(selectedNovelId = novelId) }
+            val detail = if (draft.chapters.isNotEmpty()) {
+                "已写入 ${draft.chapters.size} 个章节"
+            } else {
+                "内容已写入设定库【大纲】"
+            }
+            chatRepository.appendMessage(
+                sessionId = sessionId,
+                role = ChatRole.ASSISTANT,
+                content = if (existing != null) {
+                    "已打开书稿《${draft.title}》，$detail"
+                } else {
+                    "已创建书稿《${draft.title}》，$detail"
+                }
+            )
+        }
+    }
+
+    /** 用户拒绝：内容只保留在对话中，不创建书稿。 */
+    fun dismissNovelDraft() {
+        _uiState.update { it.copy(pendingNovelDraft = null) }
     }
 
     /** 把非书稿类资料写入备忘录（优先归入当前会话绑定的书稿）。 */
@@ -1255,6 +1378,7 @@ class AiChatViewModel(
         earlyQuestionAnswer = null
         earlyQuestionShownText = ""
         pendingQuestionDeferred = null
+        bookToolUsedThisRun = false
         beginGeneration()
         _uiState.update {
             it.copy(
@@ -1556,6 +1680,104 @@ C. 其他情况（普通问答、闲聊、片段写作、Skill 制作与调试�
                 worldSettings = worldSettings,
                 custom = custom
             )
+        }
+
+        /** 章节标题：第X章 / 第X节 / 第X回 / Chapter N，允许 Markdown 前缀。 */
+        private val CHAPTER_HEADING_REGEX = Regex(
+            "(?m)^[ \\t]{0,3}(?:#{1,4}[ \\t]*)?(?:第[0-9零一二三四五六七八九十百千两]{1,6}[章节回卷]|Chapter[ \\t]*\\d+)[^\\n]{0,40}$"
+        )
+
+        private val GENERIC_TITLE_WORDS = setOf(
+            "新书", "小说", "正文", "开篇", "书名", "作品名", "简介", "大纲", "设定", "人物",
+            "世界观", "脑洞", "策划", "方案", "报告", "分析", "总结", "目录", "前言", "序章"
+        )
+
+        private val GENRE_REGEX = Regex(
+            "玄幻|仙侠|都市|科幻|悬疑|推理|言情|历史|军事|游戏|体育|轻小说|无限流|男频|女频|二次元|奇幻|武侠"
+        )
+
+        /**
+         * 识别规则：必须同时具备书名，以及「章节正文」或「完整书籍设定」结构，才会判定为新书内容。
+         * 普通设定（缺书名）、备忘录素材、简介、脑洞、问答均不满足条件。
+         */
+        private fun detectNovelDraft(rawText: String): DetectedNovelDraft? {
+            val text = rawText.trim()
+            if (text.length < 260) return null
+            if (text.length > 200_000) return null
+
+            val chapterMatches = CHAPTER_HEADING_REGEX.findAll(text).toList()
+            val hasChapterBody = chapterMatches.isNotEmpty() && text.length >= 600
+
+            val hasCharacter = Regex("(?:人物|角色)(?:设定|小传|卡|介绍|关系|表)?").containsMatchIn(text)
+            val hasWorld = text.contains("世界观") || text.contains("设定集")
+            val hasOutline = Regex("(?:大纲|主线|剧情梗概|故事梗概|章节规划|分卷|故事梗概)").containsMatchIn(text)
+            val hasGenre = GENRE_REGEX.containsMatchIn(text)
+            val structureScore = listOf(hasCharacter, hasWorld, hasOutline, hasGenre).count { it }
+            val completeSetting = structureScore >= 3 && text.length >= 400
+
+            if (!hasChapterBody && !completeSetting) return null
+
+            // 纯脑洞 / 纯简介输出：没有章节也没有完整书籍结构时不建稿。
+            val brainstormOnly = (text.contains("核心脑洞") || text.contains("金手指")) &&
+                !hasCharacter && !hasOutline
+            if (!hasChapterBody && brainstormOnly) return null
+            val isIntroOnly = Regex("(?:作品简介|书名简介|简介文案|一句话简介)").containsMatchIn(text) &&
+                !hasCharacter && !hasOutline
+            if (!hasChapterBody && isIntroOnly) return null
+
+            val title = extractNovelTitle(text) ?: return null
+            val chapters = if (hasChapterBody) splitDetectedChapters(text, chapterMatches) else emptyList()
+            val genre = GENRE_REGEX.find(text)?.value.orEmpty()
+            val preview = text.replace(Regex("\\s+"), " ").trim().take(120)
+            return DetectedNovelDraft(
+                title = title,
+                genre = genre,
+                preview = preview,
+                chapters = chapters,
+                body = text
+            )
+        }
+
+        /** 提取正式书名：优先《书名》，其次「书名：」，最后 Markdown 一级标题。 */
+        private fun extractNovelTitle(text: String): String? {
+            val candidates = mutableListOf<String>()
+            Regex("《([^》\\n]{1,30})》").findAll(text).take(4).forEach {
+                candidates += it.groupValues[1]
+            }
+            Regex("(?:书名|作品名|小说名)[：:]\\s*([^\\n，,。；;]{1,30})").findAll(text).take(2).forEach {
+                candidates += it.groupValues[1]
+            }
+            Regex("(?m)^[ \\t]{0,3}#{1,3}[ \\t]+(.{2,30})$").findAll(text).take(3).forEach {
+                candidates += it.groupValues[1]
+            }
+            return candidates.asSequence()
+                .map { it.trim().trim('#', ' ', '*', '“', '”', '"', '「', '」').trim() }
+                .filter { it.length in 2..30 }
+                .filterNot { it in GENERIC_TITLE_WORDS }
+                .filterNot { it.startsWith("第") && Regex("[章节回卷]").containsMatchIn(it) }
+                .filterNot { Regex("^(?:Chapter|目录|附录)", RegexOption.IGNORE_CASE).containsMatchIn(it) }
+                .firstOrNull()
+        }
+
+        /** 按章节标题切分正文，返回「标题 + 正文」。 */
+        private fun splitDetectedChapters(
+            text: String,
+            matches: List<MatchResult>
+        ): List<ParsedChapter> {
+            val chapters = mutableListOf<ParsedChapter>()
+            matches.forEachIndexed { index, match ->
+                val start = match.range.first
+                val end = if (index + 1 < matches.size) matches[index + 1].range.first else text.length
+                val heading = match.value.trim().trimStart('#').trim()
+                val chapterTitle = heading.take(40).ifBlank { "第${index + 1}章" }
+                val body = text.substring(start, end)
+                    .substringAfter('\n', "")
+                    .trim()
+                if (body.isNotBlank()) {
+                    chapters += ParsedChapter(title = chapterTitle, content = body)
+                }
+            }
+            return chapters
         }
 
         fun factory(

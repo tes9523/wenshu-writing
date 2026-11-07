@@ -37,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -89,6 +90,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -434,7 +436,9 @@ fun AiChatScreen(
                                 pass = PointerEventPass.Initial
                             )
                             val up = waitForUpOrCancellation()
-                            if (up != null && !down.isConsumed) {
+                            // 只有真正落在空白区域（down/up 均未被控件消费）才收起键盘与选中态，
+                            // 否则点击气泡按钮时也会触发重组，长文本下会让按钮表现为「无响应」。
+                            if (up != null && !down.isConsumed && !up.isConsumed) {
                                 keyboardController?.hide()
                                 selectionEpoch++
                             }
@@ -557,6 +561,15 @@ fun AiChatScreen(
 
     if (state.showBackgroundGuide) {
         BackgroundKeepAliveDialog(onDismiss = { viewModel.dismissBackgroundGuide() })
+    }
+
+    // 智能识别到新书内容时的轻量确认，拒绝后内容仅保留在对话中。
+    state.pendingNovelDraft?.let { draft ->
+        NovelDraftConfirmDialog(
+            draft = draft,
+            onConfirm = viewModel::confirmNovelDraft,
+            onDismiss = viewModel::dismissNovelDraft
+        )
     }
 
     if (showBindBookDialog) {
@@ -1031,6 +1044,7 @@ private fun MessageBubble(
 ) {
     val isUser = message.role == ChatRole.USER
     var menuExpanded by remember { mutableStateOf(false) }
+    var showFullText by remember(message.id) { mutableStateOf(false) }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1107,36 +1121,34 @@ private fun MessageBubble(
             ) {
                 // key 随空白点击变化，重新创建 SelectionContainer 以退出文本选中态。
                 key(selectionEpoch) {
-                    // 超长回复分片渲染，避免单个超大 Text 阻塞布局与下方按钮的事件绑定。
-                    val mentionColor = MaterialTheme.colorScheme.primary
-                    val chunks = remember(message.content) { splitMessageChunks(message.content) }
-                    var expanded by remember(message.content) {
-                        mutableStateOf(chunks.size <= INITIAL_CHUNK_COUNT)
-                    }
-                    val visibleChunks = if (expanded) chunks else chunks.take(INITIAL_CHUNK_COUNT)
-                    SelectionContainer {
-                        Column {
-                            visibleChunks.forEachIndexed { index, chunk ->
-                                val bodyText = remember(chunk, skillNames, mentionColor) {
-                                    skillMentionAnnotatedString(chunk, skillNames, mentionColor)
-                                }
-                                Text(
-                                    text = bodyText,
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        fontSize = chatFontSize.sp
-                                    ),
-                                    modifier = if (index > 0) Modifier.padding(top = 4.dp) else Modifier
-                                )
-                            }
+                    // 超长回复只渲染前 1500 字预览，全文在独立弹窗中按分片懒加载，
+                    // 避免单个超大 Text 撑高气泡、阻塞下方按钮的点击事件。
+                    val isLongMessage = message.content.length > LONG_MESSAGE_PREVIEW_CHARS
+                    val preview = remember(message.content, isLongMessage) {
+                        if (isLongMessage) {
+                            message.content.take(LONG_MESSAGE_PREVIEW_CHARS) + "…"
+                        } else {
+                            message.content
                         }
                     }
-                    if (!expanded) {
-                        val remain = message.content.length - visibleChunks.sumOf { it.length }
+                    val mentionColor = MaterialTheme.colorScheme.primary
+                    val bodyText = remember(preview, skillNames, mentionColor) {
+                        skillMentionAnnotatedString(preview, skillNames, mentionColor)
+                    }
+                    SelectionContainer {
+                        Text(
+                            text = bodyText,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = chatFontSize.sp
+                            )
+                        )
+                    }
+                    if (isLongMessage) {
                         TextButton(
-                            onClick = { expanded = true },
+                            onClick = { showFullText = true },
                             contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)
                         ) {
-                            Text("展开全部（剩余约 $remain 字）")
+                            Text("查看全文（共 ${message.content.length} 字）")
                         }
                     }
                 }
@@ -1177,6 +1189,127 @@ private fun MessageBubble(
                             onClick = onRegenerate
                         )
                     }
+                }
+            }
+        }
+    }
+
+    if (showFullText) {
+        FullMessageDialog(
+            content = message.content,
+            chatFontSize = chatFontSize,
+            onCopy = onCopy,
+            onDismiss = { showFullText = false }
+        )
+    }
+}
+
+@Composable
+private fun NovelDraftConfirmDialog(
+    draft: DetectedNovelDraft,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Outlined.AutoStories, contentDescription = null) },
+        title = { Text("检测到新书内容") },
+        text = {
+            Column {
+                Text(
+                    text = buildString {
+                        append("《").append(draft.title).append("》")
+                        if (draft.genre.isNotBlank()) append(" · ").append(draft.genre)
+                    },
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = if (draft.chapters.isNotEmpty()) {
+                        "识别到 ${draft.chapters.size} 个章节，是否创建书稿并写入正文？"
+                    } else {
+                        "识别到完整书籍设定，是否创建书稿并写入大纲？"
+                    },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                if (draft.preview.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = draft.preview,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text("是，创建书稿") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("否，仅保留对话") }
+        }
+    )
+}
+
+/** 长消息全文阅读：分片懒加载，仅渲染可见区域，超大文本也不会卡住交互。 */
+@Composable
+private fun FullMessageDialog(
+    content: String,
+    chatFontSize: Int,
+    onCopy: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val chunks = remember(content) { splitMessageChunks(content) }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 3.dp
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "消息全文",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            Icons.Outlined.Close,
+                            contentDescription = "关闭",
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Text(
+                    text = "共 ${content.length} 字",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 480.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(items = chunks) { chunk ->
+                        SelectionContainer {
+                            Text(
+                                text = chunk,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontSize = chatFontSize.sp
+                                )
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onCopy) { Text("复制全文") }
+                    TextButton(onClick = onDismiss) { Text("关闭") }
                 }
             }
         }
@@ -1363,11 +1496,19 @@ private fun TypingBubble(
                     Spacer(Modifier.height(6.dp))
                 }
                 if (streamingText.isNotBlank()) {
+                    // 流式阶段只渲染尾部片段，超长正文生成时保持滚动与输入流畅。
+                    val visibleStreaming = remember(streamingText) {
+                        if (streamingText.length > STREAMING_PREVIEW_CHARS) {
+                            "…" + streamingText.takeLast(STREAMING_PREVIEW_CHARS)
+                        } else {
+                            streamingText
+                        }
+                    }
                     key(selectionEpoch) {
                         SelectionContainer {
                             val mentionColor = MaterialTheme.colorScheme.primary
-                            val bodyText = remember(streamingText, skillNames, mentionColor) {
-                                skillMentionAnnotatedString(streamingText, skillNames, mentionColor)
+                            val bodyText = remember(visibleStreaming, skillNames, mentionColor) {
+                                skillMentionAnnotatedString(visibleStreaming, skillNames, mentionColor)
                             }
                             Text(
                                 text = bodyText,
@@ -1684,11 +1825,14 @@ private fun InputBar(
 
 // ---- 长消息分片渲染 ----
 
-/** 每个分片的大致字数上限。 */
-private const val MAX_CHARS_PER_CHUNK = 1200
+/** 气泡内直接渲染的字数上限，超出后只显示预览并提供「查看全文」。 */
+private const val LONG_MESSAGE_PREVIEW_CHARS = 1500
 
-/** 折叠状态下先渲染的分片数量。 */
-private const val INITIAL_CHUNK_COUNT = 2
+/** 流式生成时气泡内展示的尾部字数，避免超长正文持续撑高布局。 */
+private const val STREAMING_PREVIEW_CHARS = 3000
+
+/** 全文弹窗中每个分片的大致字数上限。 */
+private const val MAX_CHARS_PER_CHUNK = 1500
 
 /**
  * 把长消息按行切分为若干分片，避免单个超大 Text 一次性布局。

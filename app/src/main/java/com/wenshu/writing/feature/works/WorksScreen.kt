@@ -65,7 +65,9 @@ import com.wenshu.writing.ui.components.CoverFiles
 import com.wenshu.writing.ui.components.CoverPreviewDialog
 import com.wenshu.writing.ui.components.EmptyState
 import com.wenshu.writing.ui.components.NovelCover
+import com.wenshu.writing.ui.components.StoragePermissionDialog
 import com.wenshu.writing.ui.components.rememberCoverPicker
+import com.wenshu.writing.ui.util.ExternalStorage
 import com.wenshu.writing.ui.util.formatShortTimestamp
 import kotlinx.coroutines.launch
 
@@ -92,6 +94,7 @@ fun WorksScreen(
     var novelToDelete by remember { mutableStateOf<Novel?>(null) }
     var introNovel by remember { mutableStateOf<Novel?>(null) }
     var pendingExportNovel by remember { mutableStateOf<Novel?>(null) }
+    var showStorageDialog by remember { mutableStateOf(false) }
     var coverTargetNovelId by remember { mutableStateOf<Long?>(null) }
     var coverPreviewBitmap by remember { mutableStateOf<Bitmap?>(null) }
     val scope = rememberCoroutineScope()
@@ -140,6 +143,16 @@ fun WorksScreen(
                     error.message ?: "整书导入失败",
                     Toast.LENGTH_SHORT
                 ).show()
+            }
+        }
+    }
+
+    fun exportNovelToWenshuDir(novel: Novel) {
+        viewModel.exportBookToExternal(context, novel.id) { result ->
+            result.onSuccess { path ->
+                Toast.makeText(context, "已导出到 $path", Toast.LENGTH_LONG).show()
+            }.onFailure { error ->
+                Toast.makeText(context, error.message ?: "导出失败", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -201,8 +214,12 @@ fun WorksScreen(
                         novel = novel,
                         onClick = { viewModel.openNovel(novel.id) { onOpenNovel(novel.id) } },
                         onExport = {
-                            pendingExportNovel = novel
-                            exportLauncher.launch(safeFileName(novel.title) + ".zip")
+                            if (ExternalStorage.isReady(context)) {
+                                exportNovelToWenshuDir(novel)
+                            } else {
+                                pendingExportNovel = novel
+                                showStorageDialog = true
+                            }
                         },
                         onChangeCover = {
                             coverTargetNovelId = novel.id
@@ -218,6 +235,22 @@ fun WorksScreen(
                 }
             }
         }
+    }
+
+    if (showStorageDialog) {
+        StoragePermissionDialog(
+            onDismiss = { showStorageDialog = false },
+            onGranted = {
+                pendingExportNovel?.let { exportNovelToWenshuDir(it) }
+                pendingExportNovel = null
+            },
+            onDecline = {
+                pendingExportNovel?.let { novel ->
+                    exportLauncher.launch(safeFileName(novel.title) + ".zip")
+                }
+                pendingExportNovel = null
+            }
+        )
     }
 
     if (showCreateDialog) {

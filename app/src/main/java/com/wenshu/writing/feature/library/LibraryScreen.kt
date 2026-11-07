@@ -1,5 +1,6 @@
 package com.wenshu.writing.feature.library
 
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AddCircle
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
@@ -67,11 +69,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.platform.LocalContext
 import com.wenshu.writing.di.AppContainer
 import com.wenshu.writing.domain.model.Setting
 import com.wenshu.writing.domain.model.SettingCategories
 import com.wenshu.writing.ui.components.ConfirmDeleteDialog
 import com.wenshu.writing.ui.components.EmptyState
+import com.wenshu.writing.ui.components.StoragePermissionDialog
+import com.wenshu.writing.ui.util.ExternalStorage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -93,9 +98,13 @@ fun LibraryScreen(
     var showAddCategory by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<String?>(null) }
     var deleteCategoryTarget by remember { mutableStateOf<String?>(null) }
+    var showStorageDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     LaunchedEffect(state.message) {
-        // 轻量提示由 Snackbar 处理；此处留空，避免额外依赖。
+        val message = state.message ?: return@LaunchedEffect
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        viewModel.consumeMessage()
     }
 
     Scaffold(
@@ -105,6 +114,19 @@ fun LibraryScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = {
+                            if (ExternalStorage.isReady(context)) {
+                                viewModel.exportToStorage(context)
+                            } else {
+                                showStorageDialog = true
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Outlined.FileDownload, contentDescription = "导出设定库")
                     }
                 }
             )
@@ -175,6 +197,13 @@ fun LibraryScreen(
                 }
             }
         }
+    }
+
+    if (showStorageDialog) {
+        StoragePermissionDialog(
+            onDismiss = { showStorageDialog = false },
+            onGranted = { viewModel.exportToStorage(context) }
+        )
     }
 
     if (showEditor) {

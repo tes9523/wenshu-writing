@@ -1,5 +1,6 @@
 package com.wenshu.writing.feature.library
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -9,6 +10,8 @@ import com.wenshu.writing.data.repository.SettingRepository
 import com.wenshu.writing.domain.model.Novel
 import com.wenshu.writing.domain.model.Setting
 import com.wenshu.writing.domain.model.SettingCategories
+import com.wenshu.writing.ui.util.ExternalStorage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -21,6 +24,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class LibraryUiState(
     val items: List<Setting> = emptyList(),
@@ -83,6 +87,56 @@ class LibraryViewModel(
                         )
                     }
                 }
+        }
+    }
+
+    /** 导出当前书稿的全部设定到外部存储 wenshu/setting（UTF-8 Markdown）。 */
+    fun exportToStorage(context: Context) {
+        val state = _uiState.value
+        viewModelScope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    val all = repository.getAll(state.activeBookId)
+                    if (all.isEmpty()) throw IllegalStateException("当前书稿暂无可导出的设定")
+                    val markdown = buildString {
+                        val bookName = state.novels.firstOrNull { it.id == state.activeBookId }?.title
+                        appendLine("# 设定库${if (bookName != null) " · 《$bookName》" else ""}")
+                        appendLine()
+                        all.groupBy { it.category }.forEach { (category, items) ->
+                            appendLine("## $category")
+                            appendLine()
+                            items.forEach { setting ->
+                                appendLine("### ${setting.title}")
+                                if (!setting.subtitle.isNullOrBlank()) {
+                                    appendLine()
+                                    appendLine("> ${setting.subtitle}")
+                                }
+                                if (setting.content.isNotBlank()) {
+                                    appendLine()
+                                    appendLine(setting.content.trim())
+                                }
+                                appendLine()
+                            }
+                        }
+                    }
+                    val bookName = state.novels.firstOrNull { it.id == state.activeBookId }?.title ?: "全局"
+                    ExternalStorage.saveText(
+                        context = context,
+                        category = ExternalStorage.Category.SETTING,
+                        fileName = "设定库_${ExternalStorage.sanitizeFileName(bookName)}_" +
+                            "${ExternalStorage.signedName()}.md",
+                        content = markdown
+                    ) ?: throw IllegalStateException("写入 wenshu/setting 失败，请检查存储权限")
+                }
+            }
+            _uiState.update {
+                it.copy(
+                    message = result.fold(
+                        onSuccess = { file -> "已导出到 ${file.absolutePath}" },
+                        onFailure = { error -> "导出失败：${error.message ?: "未知错误"}" }
+                    )
+                )
+            }
         }
     }
 

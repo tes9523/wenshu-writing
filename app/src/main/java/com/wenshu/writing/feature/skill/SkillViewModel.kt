@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.wenshu.writing.data.repository.SkillArchive
 import com.wenshu.writing.data.repository.SkillRepository
 import com.wenshu.writing.domain.model.Skill
+import com.wenshu.writing.ui.util.ExternalStorage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 
 data class SkillUiState(
     val search: String = "",
@@ -177,6 +179,45 @@ class SkillViewModel(
                                 "已导出 ${selected.size} 个技能的合集包"
                             }
                         },
+                        onFailure = { error -> "导出失败：${error.message ?: "未知错误"}" }
+                    )
+                )
+            }
+        }
+    }
+
+    /** 导出到外部存储 wenshu/skill，成功后通过 message 提示路径。 */
+    fun exportToStorage(skillIds: List<Long>) {
+        if (_uiState.value.isBusy || skillIds.isEmpty()) return
+        _uiState.update { it.copy(isBusy = true) }
+        viewModelScope.launch {
+            val selected = skills.value.filter { it.id in skillIds }
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    val buffer = ByteArrayOutputStream()
+                    if (selected.size == 1) {
+                        repository.exportSingle(buffer, selected.first())
+                    } else {
+                        repository.exportBatch(buffer, selected)
+                    }
+                    val fileName = if (selected.size == 1) {
+                        "${ExternalStorage.sanitizeFileName(selected.first().name)}.zip"
+                    } else {
+                        "skills.zip"
+                    }
+                    ExternalStorage.saveBytes(
+                        context = context,
+                        category = ExternalStorage.Category.SKILL,
+                        fileName = fileName,
+                        bytes = buffer.toByteArray()
+                    ) ?: throw IllegalStateException("写入 wenshu/skill 失败，请检查存储权限")
+                }
+            }
+            _uiState.update {
+                it.copy(
+                    isBusy = false,
+                    message = result.fold(
+                        onSuccess = { file -> "已导出到 ${file.absolutePath}" },
                         onFailure = { error -> "导出失败：${error.message ?: "未知错误"}" }
                     )
                 )

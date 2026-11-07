@@ -85,6 +85,8 @@ import com.wenshu.writing.di.AppContainer
 import com.wenshu.writing.domain.model.Skill
 import com.wenshu.writing.domain.model.SkillReference
 import com.wenshu.writing.ui.components.ConfirmDeleteDialog
+import com.wenshu.writing.ui.components.StoragePermissionDialog
+import com.wenshu.writing.ui.util.ExternalStorage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -105,6 +107,7 @@ fun SkillScreen(
     var deleteTarget by remember { mutableStateOf<Skill?>(null) }
     var showExportDialog by remember { mutableStateOf(false) }
     var pendingExportIds by remember { mutableStateOf<List<Long>>(emptyList()) }
+    var showStorageDialog by remember { mutableStateOf(false) }
     var selectedSkillId by remember { mutableStateOf<Long?>(null) }
 
     val importLauncher = rememberLauncherForActivityResult(
@@ -345,13 +348,37 @@ fun SkillScreen(
                 showExportDialog = false
                 if (ids.isEmpty()) return@ExportSelectionDialog
                 pendingExportIds = ids
-                val single = skills.firstOrNull { it.id == ids.first() }
-                val fileName = if (ids.size == 1) {
-                    "${safeFileName(single?.name ?: "skill")}.zip"
+                if (ExternalStorage.isReady(context)) {
+                    pendingExportIds = emptyList()
+                    viewModel.exportToStorage(ids)
                 } else {
-                    "skills.zip"
+                    showStorageDialog = true
                 }
-                exportLauncher.launch(fileName)
+            }
+        )
+    }
+
+    if (showStorageDialog) {
+        StoragePermissionDialog(
+            onDismiss = { showStorageDialog = false },
+            onGranted = {
+                if (pendingExportIds.isNotEmpty()) {
+                    viewModel.exportToStorage(pendingExportIds)
+                    pendingExportIds = emptyList()
+                }
+            },
+            onDecline = {
+                // 未授权时保留原有系统文件选择器导出能力。
+                val ids = pendingExportIds
+                if (ids.isNotEmpty()) {
+                    val single = skills.firstOrNull { it.id == ids.first() }
+                    val fileName = if (ids.size == 1) {
+                        "${safeFileName(single?.name ?: "skill")}.zip"
+                    } else {
+                        "skills.zip"
+                    }
+                    exportLauncher.launch(fileName)
+                }
             }
         )
     }
