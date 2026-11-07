@@ -10,6 +10,8 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -39,6 +41,7 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
@@ -1104,18 +1107,37 @@ private fun MessageBubble(
             ) {
                 // key 随空白点击变化，重新创建 SelectionContainer 以退出文本选中态。
                 key(selectionEpoch) {
+                    // 超长回复分片渲染，避免单个超大 Text 阻塞布局与下方按钮的事件绑定。
+                    val mentionColor = MaterialTheme.colorScheme.primary
+                    val chunks = remember(message.content) { splitMessageChunks(message.content) }
+                    var expanded by remember(message.content) {
+                        mutableStateOf(chunks.size <= INITIAL_CHUNK_COUNT)
+                    }
+                    val visibleChunks = if (expanded) chunks else chunks.take(INITIAL_CHUNK_COUNT)
                     SelectionContainer {
-                        // @技能名 使用独立高亮色+加粗，和普通文字明显区分。
-                        val mentionColor = MaterialTheme.colorScheme.primary
-                        val bodyText = remember(message.content, skillNames, mentionColor) {
-                            skillMentionAnnotatedString(message.content, skillNames, mentionColor)
+                        Column {
+                            visibleChunks.forEachIndexed { index, chunk ->
+                                val bodyText = remember(chunk, skillNames, mentionColor) {
+                                    skillMentionAnnotatedString(chunk, skillNames, mentionColor)
+                                }
+                                Text(
+                                    text = bodyText,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontSize = chatFontSize.sp
+                                    ),
+                                    modifier = if (index > 0) Modifier.padding(top = 4.dp) else Modifier
+                                )
+                            }
                         }
-                        Text(
-                            text = bodyText,
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                fontSize = chatFontSize.sp
-                            )
-                        )
+                    }
+                    if (!expanded) {
+                        val remain = message.content.length - visibleChunks.sumOf { it.length }
+                        TextButton(
+                            onClick = { expanded = true },
+                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)
+                        ) {
+                            Text("展开全部（剩余约 $remain 字）")
+                        }
                     }
                 }
                 if (message.isError) {
@@ -1186,12 +1208,23 @@ private fun MessageAction(
     }
 }
 
-/** 技能写入/修改确认气泡：在对话流内展示待变更内容与操作按钮，不遮挡聊天记录。 */
+/** 技能提问卡片：预设选项 + 自定义输入，生成过程中即可作答。 */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PendingQuestionBubble(
     question: PendingQuestion,
     onAnswer: (String) -> Unit
 ) {
+    var selected by remember(question.question) { mutableStateOf<String?>(null) }
+    var custom by remember(question.question) { mutableStateOf("") }
+    // 只有一个选项时默认选中，减少一次点击。
+    LaunchedEffect(question.options) {
+        if (question.options.size == 1 && selected == null) {
+            selected = question.options.first().label
+        }
+    }
+    val answer = custom.trim().ifBlank { selected.orEmpty() }
+
     Row(modifier = Modifier.fillMaxWidth()) {
         Surface(
             color = MaterialTheme.colorScheme.surface,
@@ -1199,72 +1232,100 @@ private fun PendingQuestionBubble(
             tonalElevation = 1.dp,
             modifier = Modifier.widthIn(max = 340.dp)
         ) {
-            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Outlined.AutoAwesome,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(6.dp))
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Icon(
+                            Icons.Outlined.HelpOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .padding(4.dp)
+                                .size(16.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         text = question.header.ifBlank { "需要确认" },
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
                 SelectionContainer {
                     Text(
                         text = question.question,
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }
-                Spacer(Modifier.height(10.dp))
-                if (question.options.isEmpty()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
+
+                if (question.options.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        TextButton(onClick = { onAnswer("取消") }) { Text("取消") }
-                    }
-                } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        question.options.forEachIndexed { index, option ->
-                            // 首个选项通常是「确认/保存」，用实心按钮突出；其余用描边按钮。
-                            val primary = index == 0
+                        question.options.forEach { option ->
+                            val active = selected == option.label
                             Surface(
-                                onClick = { onAnswer(option.label) },
-                                shape = RoundedCornerShape(12.dp),
-                                color = if (primary) {
+                                onClick = { selected = option.label; custom = "" },
+                                shape = RoundedCornerShape(20.dp),
+                                color = if (active) {
                                     MaterialTheme.colorScheme.primary
                                 } else {
                                     MaterialTheme.colorScheme.surfaceVariant
                                 },
-                                contentColor = if (primary) {
+                                contentColor = if (active) {
                                     MaterialTheme.colorScheme.onPrimary
                                 } else {
                                     MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                                    Text(option.label, style = MaterialTheme.typography.titleSmall)
-                                    if (option.description.isNotBlank()) {
-                                        Text(
-                                            option.description,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = if (primary) {
-                                                MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f)
-                                            } else {
-                                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                                            }
-                                        )
-                                    }
                                 }
+                            ) {
+                                Text(
+                                    text = option.label,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                )
                             }
                         }
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = custom,
+                    onValueChange = {
+                        custom = it
+                        if (it.isNotBlank()) selected = null
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("输入自定义答案…", style = MaterialTheme.typography.bodySmall) },
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    maxLines = 3
+                )
+
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (question.options.isEmpty()) "" else "可直接点选或自行输入",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { onAnswer("取消") }) { Text("跳过") }
+                    Spacer(Modifier.width(4.dp))
+                    Button(
+                        onClick = { if (answer.isNotBlank()) onAnswer(answer) },
+                        enabled = answer.isNotBlank()
+                    ) {
+                        Text(if (question.options.size > 1) "下一题" else "确定")
                     }
                 }
             }
@@ -1619,4 +1680,49 @@ private fun InputBar(
             }
         }
     }
+}
+
+// ---- 长消息分片渲染 ----
+
+/** 每个分片的大致字数上限。 */
+private const val MAX_CHARS_PER_CHUNK = 1200
+
+/** 折叠状态下先渲染的分片数量。 */
+private const val INITIAL_CHUNK_COUNT = 2
+
+/**
+ * 把长消息按行切分为若干分片，避免单个超大 Text 一次性布局。
+ * 分片按原文顺序拼接后与原文一致（保留换行）。
+ */
+private fun splitMessageChunks(text: String): List<String> {
+    if (text.length <= MAX_CHARS_PER_CHUNK) return listOf(text)
+    val chunks = mutableListOf<String>()
+    val buffer = StringBuilder()
+
+    fun flush() {
+        if (buffer.isNotEmpty()) {
+            chunks += buffer.toString()
+            buffer.clear()
+        }
+    }
+
+    text.split('\n').forEachIndexed { index, line ->
+        val segment = if (index == 0) line else "\n$line"
+        if (segment.length > MAX_CHARS_PER_CHUNK) {
+            flush()
+            var start = 0
+            while (start < segment.length) {
+                var end = (start + MAX_CHARS_PER_CHUNK).coerceAtMost(segment.length)
+                // 避免把代理对（emoji 等）从中间截断。
+                if (end < segment.length && segment[end - 1].isHighSurrogate()) end++
+                chunks += segment.substring(start, end)
+                start = end
+            }
+        } else {
+            if (buffer.length + segment.length > MAX_CHARS_PER_CHUNK) flush()
+            buffer.append(segment)
+        }
+    }
+    flush()
+    return if (chunks.isEmpty()) listOf(text) else chunks
 }

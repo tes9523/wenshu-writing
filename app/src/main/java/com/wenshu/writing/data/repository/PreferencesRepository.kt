@@ -28,7 +28,8 @@ class PreferencesRepository(
             soundEnabled = entity?.soundEnabled ?: true,
             soundType = entity?.soundType ?: "notification",
             fontName = entity?.fontName ?: "system",
-            chatFontSize = entity?.chatFontSize ?: 14
+            chatFontSize = entity?.chatFontSize ?: 14,
+            maxAgentTurns = entity?.maxAgentTurns ?: 10
         )
     }
 
@@ -77,6 +78,11 @@ class PreferencesRepository(
 
     suspend fun setChatFontSize(size: Int) {
         update { it.copy(chatFontSize = size.coerceIn(10, 22)) }
+    }
+
+    /** 技能工具调用轮次上限：1..100，达到后仅提示用户可继续接续。 */
+    suspend fun setMaxAgentTurns(turns: Int) {
+        update { it.copy(maxAgentTurns = turns.coerceIn(1, 100)) }
     }
 
     /** 切换当前激活书稿；-1 表示回落到全局公共素材。 */

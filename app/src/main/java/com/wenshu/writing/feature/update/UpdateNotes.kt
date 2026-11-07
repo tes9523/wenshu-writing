@@ -36,6 +36,16 @@ data class UpdateNote(
 /** 历史更新公告（按版本倒序排列）。 */
 val UPDATE_NOTES: List<UpdateNote> = listOf(
     UpdateNote(
+        version = "1.1.7",
+        title = "长消息优化 · 交互式提问 · 轮次可配置",
+        highlights = listOf(
+            "超长 AI 消息改为分片渲染，先展示首屏再按需展开，气泡下方按钮始终可点击",
+            "技能提问卡片升级：预设选项按钮 + 自定义输入框，生成过程中即可作答",
+            "技能工具调用轮次上限可在 设置 → 开发者选项 调整（默认 10 轮）",
+            "达到轮次上限不再强制中断，改为对话内柔和提示，发送「继续」即可接续流程"
+        )
+    ),
+    UpdateNote(
         version = "1.1.6",
         title = "简介生成器 · 滚动体验修复 · 技能写入规范",
         highlights = listOf(

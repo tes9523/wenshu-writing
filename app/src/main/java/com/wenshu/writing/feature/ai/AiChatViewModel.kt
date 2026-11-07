@@ -142,7 +142,9 @@ data class AiChatUiState(
     val skillLogEnabled: Boolean = false,
     val skillLogs: List<String> = emptyList(),
     /** 首次长耗时生成时弹出的后台保活引导。 */
-    val showBackgroundGuide: Boolean = false
+    val showBackgroundGuide: Boolean = false,
+    /** 技能单轮最大工具调用轮次（开发者可配置）。 */
+    val maxAgentTurns: Int = 10
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -166,6 +168,12 @@ class AiChatViewModel(
 
     /** 技能 question 工具等待用户回答的挂起点。 */
     private var pendingQuestionDeferred: CompletableDeferred<String>? = null
+
+    /** 提问卡片在流式生成期间就被用户回答时的答案暂存，工具真正执行时直接复用。 */
+    private var earlyQuestionAnswer: String? = null
+
+    /** 已提前渲染的提问内容，避免流式参数重复刷新卡片。 */
+    private var earlyQuestionShownText: String = ""
 
     /** 离开对话页时记下的滚动位置，回到页面后据此恢复，避免被重置到顶部或底部。 */
     var savedScrollIndex: Int = 0
@@ -212,7 +220,8 @@ class AiChatViewModel(
                             apiKey = active?.apiKey ?: "",
                             model = active?.model ?: "",
                             apiType = active?.apiType ?: ApiProviderType.OPENAI,
-                            activeNovelId = settings.activeNovelId
+                            activeNovelId = settings.activeNovelId,
+                            maxAgentTurns = settings.maxAgentTurns
                         )
                     }
                 }
@@ -436,11 +445,16 @@ class AiChatViewModel(
         }
 
         requestJob?.cancel()
+        // 新一轮生成：清空上一轮残留的提前提问状态。
+        earlyQuestionAnswer = null
+        earlyQuestionShownText = ""
+        pendingQuestionDeferred = null
         _uiState.update {
             it.copy(
                 input = "",
                 isSending = true,
                 isSearching = state.webSearchEnabled,
+                pendingQuestion = null,
                 mentionQuery = null,
                 mentionResults = emptyList(),
                 streamingText = "",
@@ -517,6 +531,8 @@ class AiChatViewModel(
     fun stopGeneration() {
         pendingQuestionDeferred?.complete("用户已停止当前技能流程")
         pendingQuestionDeferred = null
+        earlyQuestionAnswer = null
+        earlyQuestionShownText = ""
         _uiState.update { it.copy(pendingQuestion = null) }
         requestJob?.cancel()
         AiGenerationService.stop(context)
@@ -599,7 +615,10 @@ class AiChatViewModel(
         }
         appendAgentLog("开始 Agent 循环：绑定书稿=${_uiState.value.activeSessionBookId}，工具=${tools.joinToString { it.name }}")
 
-        repeat(MAX_AGENT_TURNS) { turnIndex ->
+        // 轮次上限来自设置（开发者可配置），不再硬编码。
+        val maxTurns = _uiState.value.maxAgentTurns.coerceIn(1, 100)
+
+        repeat(maxTurns) { turnIndex ->
             currentCoroutineContext().ensureActive()
             _uiState.update { it.copy(streamingText = "", streamingReasoning = "", activeToolName = null) }
             appendAgentLog("第 ${turnIndex + 1} 轮请求模型")
@@ -618,20 +637,25 @@ class AiChatViewModel(
                 messages = messages,
                 systemPrompt = systemPrompt,
                 tools = tools,
+                onToolCallDelta = { name, args ->
+                    // 提问工具参数仍在流式到达时提前渲染卡片，让用户不必等整轮输出结束。
+                    if (name == "question") maybeEmitEarlyQuestion(args)
+                },
                 onReasoningDelta = { delta ->
                     _uiState.update { current ->
                         current.copy(streamingReasoning = current.streamingReasoning + delta)
                     }
+                },
+                onTextDelta = { delta ->
+                    _uiState.update { current ->
+                        // 正文开始输出后清除思考文本，思考内容不进入最终回复。
+                        current.copy(
+                            streamingText = current.streamingText + delta,
+                            streamingReasoning = ""
+                        )
+                    }
                 }
-            ) { delta ->
-                _uiState.update { current ->
-                    // 正文开始输出后清除思考文本，思考内容不进入最终回复。
-                    current.copy(
-                        streamingText = current.streamingText + delta,
-                        streamingReasoning = ""
-                    )
-                }
-            }.getOrElse { error ->
+            ).getOrElse { error ->
                 val partial = _uiState.value.streamingText.trim()
                 if (partial.isNotBlank()) {
                     chatRepository.appendMessage(sessionId, ChatRole.ASSISTANT, partial)
@@ -671,16 +695,82 @@ class AiChatViewModel(
             _uiState.update { it.copy(streamingText = "", activeToolName = null) }
         }
 
+        // 达到轮次上限：不硬中断流程，让模型做一次收敛总结，并在对话内柔和提示可继续接续。
+        appendAgentLog("达到工具调用轮次上限（$maxTurns），生成阶段总结")
+        val wrapNotice = "本轮技能执行已达到 $maxTurns 次工具调用上限（可在 设置 → 开发者选项 调整）。\n" +
+            "已完成的进度均已保存，直接发送「继续」即可从断点接着完成剩余步骤。"
+        _uiState.update { it.copy(streamingText = "", streamingReasoning = "", activeToolName = null) }
+        val summary = runCatching {
+            aiClient.chatStream(
+                config = config,
+                messages = messages + AgentMessage(
+                    "user",
+                    "本轮已达到工具调用轮次上限。请用简洁的中文总结当前已完成的进度，并告诉用户发送「继续」可以接着完成剩余步骤。不要再调用任何工具。"
+                ),
+                systemPrompt = buildSystemPrompt(_uiState.value.skills) + buildBookContext(sessionId),
+                tools = emptyList()
+            ).getOrThrow().text.trim()
+        }.getOrDefault("")
         chatRepository.appendMessage(
             sessionId = sessionId,
             role = ChatRole.ASSISTANT,
-            content = "本次技能执行已达到工具调用轮数上限，已暂停。可继续发送消息让模型接着完成剩余步骤。",
-            isError = true
+            content = if (summary.isNotBlank()) "$summary\n\n$wrapNotice" else wrapNotice
         )
     }
 
-    /** 提问工具：展示确认弹窗并等待用户选择，最多等待 5 分钟。 */
+    /**
+     * 流式参数到达时尝试解析提问内容并提前展示卡片。
+     * 只在已拿到问题文本后渲染，参数继续增长时刷新选项，用户可边生成边作答。
+     */
+    private fun maybeEmitEarlyQuestion(rawArgs: String) {
+        if (earlyQuestionAnswer != null || pendingQuestionDeferred != null) return
+        val question = parsePartialQuestion(rawArgs) ?: return
+        val key = "${question.question}|${question.options.size}"
+        if (key == earlyQuestionShownText) return
+        earlyQuestionShownText = key
+        _uiState.update { it.copy(pendingQuestion = question) }
+    }
+
+    /** 宽松解析流式 JSON：允许末尾缺失引号/括号，仅取已完整输出的字段。 */
+    private fun parsePartialQuestion(raw: String): PendingQuestion? {
+        val questionText = extractJsonString(raw, "question")?.trim().orEmpty()
+        if (questionText.length < 8) return null
+        val header = extractJsonString(raw, "header").orEmpty()
+        val options = Regex("\"label\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
+            .findAll(raw)
+            .map { it.groupValues[1].unescapeJson() }
+            .filter { it.isNotBlank() }
+            .toList()
+        val descriptions = Regex("\"description\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
+            .findAll(raw)
+            .map { it.groupValues[1].unescapeJson() }
+            .toList()
+        return PendingQuestion(
+            question = questionText,
+            header = header.ifBlank { "需要你的确认" },
+            options = options.mapIndexed { index, label ->
+                PendingQuestionOption(label = label, description = descriptions.getOrNull(index).orEmpty())
+            }
+        )
+    }
+
+    private fun extractJsonString(raw: String, key: String): String? =
+        Regex("\"$key\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)").find(raw)?.groupValues?.get(1)?.unescapeJson()
+
+    private fun String.unescapeJson(): String = replace("\\n", "\n")
+        .replace("\\\"", "\"")
+        .replace("\\\\", "\\")
+
+    /** 提问工具：展示提问卡片并等待用户选择，最多等待 5 分钟。 */
     private suspend fun requestQuestion(question: PendingQuestion): String {
+        // 用户已在生成期间提前作答：直接复用，不再重复等待。
+        earlyQuestionAnswer?.let { answer ->
+            earlyQuestionAnswer = null
+            earlyQuestionShownText = ""
+            _uiState.update { it.copy(pendingQuestion = null) }
+            appendAgentLog("复用生成期间的提前回答：$answer")
+            return "用户选择：$answer"
+        }
         val deferred = CompletableDeferred<String>()
         pendingQuestionDeferred = deferred
         _uiState.update { it.copy(pendingQuestion = question) }
@@ -691,14 +781,24 @@ class AiChatViewModel(
             "用户未在时限内回答"
         } finally {
             pendingQuestionDeferred = null
+            earlyQuestionShownText = ""
             _uiState.update { it.copy(pendingQuestion = null) }
         }
         appendAgentLog("用户回答：$answer")
         return "用户选择：$answer"
     }
 
-    /** 用户在弹窗中选择选项。 */
+    /** 用户在提问卡片中选择预设选项或输入自定义答案。 */
     fun answerQuestion(label: String) {
+        // 生成期间提前作答：先暂存，等 question 工具真正执行时直接使用。
+        if (pendingQuestionDeferred == null) {
+            if (_uiState.value.pendingQuestion != null) {
+                earlyQuestionAnswer = label
+                _uiState.update { it.copy(pendingQuestion = null) }
+                appendAgentLog("已记录提前回答：$label")
+            }
+            return
+        }
         val deferred = pendingQuestionDeferred ?: return
         _uiState.update { it.copy(pendingQuestion = null) }
         deferred.complete(label)
@@ -1152,11 +1252,15 @@ class AiChatViewModel(
             return
         }
         requestJob?.cancel()
+        earlyQuestionAnswer = null
+        earlyQuestionShownText = ""
+        pendingQuestionDeferred = null
         beginGeneration()
         _uiState.update {
             it.copy(
                 isSending = true,
                 isSearching = false,
+                pendingQuestion = null,
                 streamingText = "",
                 streamingReasoning = "",
                 activeToolName = null,
@@ -1266,9 +1370,6 @@ class AiChatViewModel(
     )
 
     companion object {
-        /** 单次请求最多允许的 Agent 工具轮数，防止模型死循环。 */
-        private const val MAX_AGENT_TURNS = 10
-
         /** 等待用户回答 question 工具的最长时间。 */
         private const val QUESTION_TIMEOUT_MS = 300_000L
 

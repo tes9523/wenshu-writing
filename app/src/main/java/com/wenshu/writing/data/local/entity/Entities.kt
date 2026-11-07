@@ -118,7 +118,9 @@ data class AppSettingsEntity(
     /** 应用字体：system / serif / sans / mono。 */
     @ColumnInfo(defaultValue = "system") val fontName: String = "system",
     /** 聊天消息字号（sp）。 */
-    @ColumnInfo(defaultValue = "14") val chatFontSize: Int = 14
+    @ColumnInfo(defaultValue = "14") val chatFontSize: Int = 14,
+    /** 技能单轮对话允许的最大工具调用轮次（开发者可配置）。 */
+    @ColumnInfo(defaultValue = "10") val maxAgentTurns: Int = 10
 )
 
 /** AI 对话会话。bookId 为 null 表示全局通用会话。 */

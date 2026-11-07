@@ -128,7 +128,9 @@ data class AppSettings(
     /** 应用字体：system / serif / sans / mono。 */
     val fontName: String = "system",
     /** 聊天消息字号（sp）。 */
-    val chatFontSize: Int = 14
+    val chatFontSize: Int = 14,
+    /** 技能单轮对话允许的最大工具调用轮次（开发者可配置，达到后仅提示可继续）。 */
+    val maxAgentTurns: Int = 10
 )
 
 /** 灵感备忘录（纯文本）。bookId 为 null 表示全局公共备忘录。 */

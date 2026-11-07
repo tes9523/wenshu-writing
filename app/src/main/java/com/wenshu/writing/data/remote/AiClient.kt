@@ -178,7 +178,9 @@ class AiClient(
         systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
         tools: List<AgentToolSpec> = emptyList(),
         onReasoningDelta: (String) -> Unit = {},
-        onTextDelta: (String) -> Unit = {}
+        onTextDelta: (String) -> Unit = {},
+        /** 工具调用参数仍在流式到达时回调（name, 目前已累积的参数 JSON 片段），用于提前渲染提问卡片。 */
+        onToolCallDelta: (String, String) -> Unit = { _, _ -> }
     ): Result<AgentTurnResult> = withContext(Dispatchers.IO) {
         require(config.baseUrl.isNotBlank()) { "请先在 API 配置中填写 API 地址" }
         require(config.apiKey.isNotBlank()) { "请先在 API 配置中填写 API Key" }
@@ -267,9 +269,9 @@ class AiClient(
                 }
                 val source = response.body?.source() ?: throw IOException("服务未返回响应内容")
                 val result = if (isAnthropic) {
-                    parseAnthropicStream(source, onReasoningDelta, onTextDelta)
+                    parseAnthropicStream(source, onReasoningDelta, onTextDelta, onToolCallDelta)
                 } else {
-                    parseOpenAiStream(source, onReasoningDelta, onTextDelta)
+                    parseOpenAiStream(source, onReasoningDelta, onTextDelta, onToolCallDelta)
                 }
                 if (result.text.isBlank() && result.toolCalls.isEmpty()) {
                     throw IOException("模型未返回有效内容")
@@ -292,7 +294,8 @@ class AiClient(
     private fun parseOpenAiStream(
         source: BufferedSource,
         onReasoningDelta: (String) -> Unit,
-        onTextDelta: (String) -> Unit
+        onTextDelta: (String) -> Unit,
+        onToolCallDelta: (String, String) -> Unit = { _, _ -> }
     ): AgentTurnResult {
         val text = StringBuilder()
         val toolCalls = sortedMapOf<Int, ToolCallAccumulator>()
@@ -334,7 +337,10 @@ class AiClient(
                     ?.takeIf { it.isNotBlank() }
                     ?.let { accumulator.name = it }
                 function?.get("arguments")?.jsonPrimitive?.contentOrNull
-                    ?.let { accumulator.arguments.append(it) }
+                    ?.let {
+                        accumulator.arguments.append(it)
+                        onToolCallDelta(accumulator.name, accumulator.arguments.toString())
+                    }
             }
         }
         val calls = toolCalls.entries
@@ -353,7 +359,8 @@ class AiClient(
     private fun parseAnthropicStream(
         source: BufferedSource,
         onReasoningDelta: (String) -> Unit,
-        onTextDelta: (String) -> Unit
+        onTextDelta: (String) -> Unit,
+        onToolCallDelta: (String, String) -> Unit = { _, _ -> }
     ): AgentTurnResult {
         val textBlocks = sortedMapOf<Int, StringBuilder>()
         val toolBlocks = sortedMapOf<Int, ToolCallAccumulator>()
@@ -397,8 +404,11 @@ class AiClient(
                         }
                         "input_json_delta" -> {
                             delta["partial_json"]?.jsonPrimitive?.contentOrNull
-                                ?.let { toolBlocks.getOrPut(index) { ToolCallAccumulator() }
-                                    .arguments.append(it) }
+                                ?.let {
+                                    val acc = toolBlocks.getOrPut(index) { ToolCallAccumulator() }
+                                    acc.arguments.append(it)
+                                    onToolCallDelta(acc.name, acc.arguments.toString())
+                                }
                         }
                     }
                 }
