@@ -286,9 +286,41 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        /** 1.1.7 -> 1.1.8：技能工具调用轮次默认值调整为 15，仅升级仍为默认值 10 的用户。 */
+        /**
+         * 1.1.7 -> 1.1.8：技能工具调用轮次默认值调整为 15，仅升级仍为默认值 10 的用户。
+         * SQLite 不支持修改列默认值，需重建 app_settings 表让 schema 与新实体一致，
+         * 否则 Room 校验失败会在启动时崩溃。
+         */
         private val MIGRATION_10_11 = object : Migration(10, 11) {
             override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `app_settings_new` (" +
+                        "`id` INTEGER NOT NULL, " +
+                        "`themeMode` TEXT NOT NULL, " +
+                        "`activeAiProfileId` INTEGER NOT NULL DEFAULT -1, " +
+                        "`activeNovelId` INTEGER NOT NULL DEFAULT -1, " +
+                        "`themeColorName` TEXT NOT NULL DEFAULT 'INK', " +
+                        "`backgroundColorName` TEXT NOT NULL DEFAULT '', " +
+                        "`backgroundImagePath` TEXT, " +
+                        "`soundEnabled` INTEGER NOT NULL DEFAULT 1, " +
+                        "`soundType` TEXT NOT NULL DEFAULT 'notification', " +
+                        "`fontName` TEXT NOT NULL DEFAULT 'system', " +
+                        "`chatFontSize` INTEGER NOT NULL DEFAULT 14, " +
+                        "`maxAgentTurns` INTEGER NOT NULL DEFAULT 15, " +
+                        "PRIMARY KEY(`id`))"
+                )
+                db.execSQL(
+                    "INSERT INTO `app_settings_new` (`id`, `themeMode`, `activeAiProfileId`, " +
+                        "`activeNovelId`, `themeColorName`, `backgroundColorName`, " +
+                        "`backgroundImagePath`, `soundEnabled`, `soundType`, `fontName`, " +
+                        "`chatFontSize`, `maxAgentTurns`) " +
+                        "SELECT `id`, `themeMode`, `activeAiProfileId`, `activeNovelId`, " +
+                        "`themeColorName`, `backgroundColorName`, `backgroundImagePath`, " +
+                        "`soundEnabled`, `soundType`, `fontName`, `chatFontSize`, `maxAgentTurns` " +
+                        "FROM `app_settings`"
+                )
+                db.execSQL("DROP TABLE `app_settings`")
+                db.execSQL("ALTER TABLE `app_settings_new` RENAME TO `app_settings`")
                 db.execSQL(
                     "UPDATE `app_settings` SET `maxAgentTurns` = 15 WHERE `maxAgentTurns` = 10"
                 )
