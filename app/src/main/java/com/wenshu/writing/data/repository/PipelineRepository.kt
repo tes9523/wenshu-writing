@@ -1,10 +1,8 @@
 package com.wenshu.writing.data.repository
 
 import com.wenshu.writing.data.local.dao.PipelineDao
-import com.wenshu.writing.data.local.dao.SettingDao
 import com.wenshu.writing.data.local.entity.ChapterTaskEntity
 import com.wenshu.writing.data.local.entity.PipelineRunEntity
-import com.wenshu.writing.data.local.entity.SettingEntity
 import com.wenshu.writing.data.local.entity.toEntity
 import com.wenshu.writing.data.local.entity.toModel
 import com.wenshu.writing.domain.model.ChapterTask
@@ -18,17 +16,18 @@ import kotlinx.coroutines.withContext
 
 class PipelineRepository(
     private val pipelineDao: PipelineDao,
-    private val settingDao: SettingDao
+    /** 大纲读写走 SettingRepository，自动同步到 wenshu/setting 目录。 */
+    private val settingRepository: SettingRepository
 ) {
 
     fun observeOutlines(bookId: Long): Flow<List<Setting>> =
-        settingDao.observeByCategory(bookId, SettingCategories.OUTLINE).map { it.map { e -> e.toModel() } }
+        settingRepository.observeByCategory(bookId, SettingCategories.OUTLINE)
 
     fun observeTasks(novelId: Long): Flow<List<ChapterTask>> =
         pipelineDao.observeTasks(novelId).map { list -> list.map { it.toModel() } }
 
     suspend fun getOutlines(bookId: Long): List<Setting> = withContext(Dispatchers.IO) {
-        settingDao.getByCategory(bookId, SettingCategories.OUTLINE).map { it.toModel() }
+        settingRepository.getByCategory(bookId, SettingCategories.OUTLINE)
     }
 
     suspend fun getTasks(novelId: Long): List<ChapterTask> = withContext(Dispatchers.IO) {
@@ -36,20 +35,10 @@ class PipelineRepository(
     }
 
     suspend fun replaceOutlines(bookId: Long, outlines: List<Setting>) = withContext(Dispatchers.IO) {
-        settingDao.deleteByCategory(bookId, SettingCategories.OUTLINE)
-        if (outlines.isEmpty()) return@withContext
-        val now = System.currentTimeMillis()
-        settingDao.insertAll(
-            outlines.map { outline ->
-                SettingEntity(
-                    bookId = bookId,
-                    category = SettingCategories.OUTLINE,
-                    title = outline.title,
-                    content = outline.content,
-                    createdAt = now,
-                    updatedAt = now
-                )
-            }
+        settingRepository.replaceByCategory(
+            bookId = bookId,
+            category = SettingCategories.OUTLINE,
+            items = outlines.map { it.copy(bookId = bookId, category = SettingCategories.OUTLINE) }
         )
     }
 

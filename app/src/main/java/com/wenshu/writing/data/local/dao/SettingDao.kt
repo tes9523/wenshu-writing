@@ -27,6 +27,9 @@ interface SettingDao {
     @Query("SELECT * FROM settings WHERE (bookId = :bookId OR (bookId IS NULL AND :bookId IS NULL)) AND category = :category ORDER BY updatedAt DESC")
     suspend fun getByCategory(bookId: Long?, category: String): List<SettingEntity>
 
+    @Query("SELECT * FROM settings WHERE id = :id")
+    suspend fun getById(id: Long): SettingEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: SettingEntity): Long
 

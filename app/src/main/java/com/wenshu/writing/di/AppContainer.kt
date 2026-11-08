@@ -4,6 +4,7 @@ import android.content.Context
 import com.wenshu.writing.data.local.AppDatabase
 import com.wenshu.writing.data.remote.AiClient
 import com.wenshu.writing.data.repository.ChatRepository
+import com.wenshu.writing.data.repository.FileSyncManager
 import com.wenshu.writing.data.repository.MemoRepository
 import com.wenshu.writing.data.repository.NovelRepository
 import com.wenshu.writing.data.repository.PipelineRepository
@@ -40,15 +41,22 @@ class AppContainer(context: Context) {
         return value
     }
 
+    /** wenshu 外部目录双向同步（书稿文件夹、设定文件）。 */
+    val fileSyncManager = FileSyncManager(appContext) { id ->
+        database.novelDao().getById(id)?.title
+    }
+
     val novelRepository = NovelRepository(
         novelDao = database.novelDao(),
         chapterDao = database.chapterDao(),
         settingDao = database.settingDao(),
-        memoDao = database.memoDao()
+        memoDao = database.memoDao(),
+        fileSync = fileSyncManager
     )
 
     val settingRepository = SettingRepository(
-        settingDao = database.settingDao()
+        settingDao = database.settingDao(),
+        fileSync = fileSyncManager
     )
 
     val preferencesRepository = PreferencesRepository(
@@ -70,7 +78,7 @@ class AppContainer(context: Context) {
 
     val pipelineRepository = PipelineRepository(
         pipelineDao = database.pipelineDao(),
-        settingDao = database.settingDao()
+        settingRepository = settingRepository
     )
 
     val aiClient = AiClient()

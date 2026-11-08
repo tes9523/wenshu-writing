@@ -36,6 +36,17 @@ data class UpdateNote(
 /** 历史更新公告（按版本倒序排列）。 */
 val UPDATE_NOTES: List<UpdateNote> = listOf(
     UpdateNote(
+        version = "1.1.9",
+        title = "小说导入 · 文件夹双向同步 · 本地文档解析",
+        highlights = listOf(
+            "书稿页「导入」改为「导入小说」：支持 TXT / MD / DOCX，自动识别 UTF-8、UTF-16、GBK / GB2312 编码",
+            "智能识别章节标题自动分章，导入全程实时进度条，成功/失败弹窗精准反馈",
+            "新建书稿自动创建 wenshu/books 同名文件夹；新建设定同步写入 wenshu/setting 对应目录",
+            "删除书稿/设定时同步删除本地对应文件夹与文件，不留残留",
+            "1.1.8 全部功能保留：气泡按钮修复、新书智能识别、外部存储目录"
+        )
+    ),
+    UpdateNote(
         version = "1.1.8",
         title = "长消息按钮修复 · 新书智能识别 · 外部存储目录",
         highlights = listOf(

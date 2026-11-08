@@ -16,7 +16,9 @@ class NovelRepository(
     private val novelDao: NovelDao,
     private val chapterDao: ChapterDao,
     private val settingDao: SettingDao,
-    private val memoDao: MemoDao
+    private val memoDao: MemoDao,
+    /** wenshu/books 目录双向同步；为 null 时只做数据库存储。 */
+    private val fileSync: FileSyncManager? = null
 ) {
 
     /** 书稿列表（不含回收站中的书稿）。 */
@@ -48,7 +50,7 @@ class NovelRepository(
 
     suspend fun createNovel(title: String, description: String): Long {
         val now = System.currentTimeMillis()
-        return novelDao.insert(
+        val id = novelDao.insert(
             NovelEntity(
                 title = title.trim(),
                 description = description.trim(),
@@ -56,6 +58,8 @@ class NovelRepository(
                 updatedAt = now
             )
         )
+        fileSync?.onNovelCreated(title.trim())
+        return id
     }
 
     /** 移入回收站（软删除），设定、章节、备忘录保留，可随时恢复。 */
@@ -68,15 +72,19 @@ class NovelRepository(
         novelDao.restore(novelId)
     }
 
-    /** 回收站中的永久删除：连同关联的设定、章节、备忘录一并清除。 */
+    /** 回收站中的永久删除：连同关联的设定、章节、备忘录与 wenshu 同步文件一并清除。 */
     suspend fun deleteNovelPermanently(novelId: Long) {
+        val title = novelDao.getById(novelId)?.title
         settingDao.deleteByBookId(novelId)
         memoDao.deleteByBookId(novelId)
         novelDao.deleteById(novelId)
+        if (title != null) fileSync?.onNovelDeleted(title)
     }
 
     suspend fun deleteNovel(novelId: Long) {
+        val title = novelDao.getById(novelId)?.title
         novelDao.deleteById(novelId)
+        if (title != null) fileSync?.onNovelDeleted(title)
     }
 
     /** 设置或清除书稿自定义封面；传 null 恢复默认封面。 */

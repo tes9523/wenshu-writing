@@ -21,6 +21,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.FileDownload
@@ -37,6 +39,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -70,6 +73,7 @@ import com.wenshu.writing.ui.components.rememberCoverPicker
 import com.wenshu.writing.ui.util.ExternalStorage
 import com.wenshu.writing.ui.util.formatShortTimestamp
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -88,6 +92,8 @@ fun WorksScreen(
         )
     )
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val importProgress by viewModel.importProgress.collectAsStateWithLifecycle()
+    val importResult by viewModel.importResult.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     var showCreateDialog by rememberSaveable { mutableStateOf(false) }
@@ -124,27 +130,12 @@ fun WorksScreen(
         }
     }
 
+    // 「导入小说」：支持 TXT / MD / DOCX，自动识别编码并智能分章。
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        val stream = runCatching { context.contentResolver.openInputStream(uri) }.getOrNull()
-        if (stream == null) {
-            Toast.makeText(context, "无法读取文件", Toast.LENGTH_SHORT).show()
-            return@rememberLauncherForActivityResult
-        }
-        viewModel.importBook(stream) { result ->
-            result.onSuccess { novelId ->
-                Toast.makeText(context, "整书导入成功", Toast.LENGTH_SHORT).show()
-                onOpenNovel(novelId)
-            }.onFailure { error ->
-                Toast.makeText(
-                    context,
-                    error.message ?: "整书导入失败",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        }
+        viewModel.importNovelDocument(context, uri)
     }
 
     fun exportNovelToWenshuDir(novel: Novel) {
@@ -166,8 +157,8 @@ fun WorksScreen(
                     IconButton(onClick = onOpenTrash) {
                         Icon(Icons.Outlined.DeleteOutline, contentDescription = "回收站")
                     }
-                    IconButton(onClick = { importLauncher.launch(arrayOf("application/zip")) }) {
-                        Icon(Icons.Outlined.FileUpload, contentDescription = "导入整书数据包")
+                    IconButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+                        Icon(Icons.Outlined.FileUpload, contentDescription = "导入小说")
                     }
                 }
             )
@@ -195,8 +186,8 @@ fun WorksScreen(
                             Spacer(Modifier.width(8.dp))
                             Text("新建小说")
                         }
-                        TextButton(onClick = { importLauncher.launch(arrayOf("application/zip")) }) {
-                            Text("导入整书数据包")
+                        TextButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+                            Text("导入小说（TXT / MD / DOCX）")
                         }
                     }
                 }
@@ -234,6 +225,84 @@ fun WorksScreen(
                     )
                 }
             }
+        }
+    }
+
+    // 导入进度弹窗：读取文件 → 编码解析 → 文本分章 → 写入书稿，导入期间不可误触关闭。
+    importProgress?.let { progress ->
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("正在导入小说") },
+            text = {
+                Column {
+                    Text(
+                        text = progress.fileName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    LinearProgressIndicator(
+                        progress = { progress.percent },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "${progress.stage.label} · ${(progress.percent * 100).roundToInt()}%",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = { }
+        )
+    }
+
+    // 导入结果弹窗：成功展示章节数量，失败展示精准原因。
+    importResult?.let { result ->
+        result.onSuccess { summary ->
+            AlertDialog(
+                onDismissRequest = { viewModel.clearImportResult() },
+                icon = { Icon(Icons.Outlined.CheckCircle, contentDescription = null) },
+                title = { Text("导入成功") },
+                text = {
+                    Column {
+                        Text("《${summary.title}》", style = MaterialTheme.typography.titleSmall)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "共导入 ${summary.chapterCount} 个章节\n" +
+                                "格式 ${summary.formatName} · 编码 ${summary.encoding}" +
+                                if (summary.singleChapter) {
+                                    "\n未识别到章节标题，已整本存入单章「全文」"
+                                } else {
+                                    ""
+                                },
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            viewModel.clearImportResult()
+                            onOpenNovel(summary.novelId)
+                        }
+                    ) { Text("打开书稿") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.clearImportResult() }) { Text("完成") }
+                }
+            )
+        }.onFailure { error ->
+            AlertDialog(
+                onDismissRequest = { viewModel.clearImportResult() },
+                icon = { Icon(Icons.Outlined.ErrorOutline, contentDescription = null) },
+                title = { Text("导入失败") },
+                text = { Text(error.message ?: "未知错误") },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.clearImportResult() }) { Text("知道了") }
+                }
+            )
         }
     }
 

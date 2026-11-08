@@ -14,8 +14,8 @@ android {
         applicationId = "com.wenshu.writing"
         minSdk = 24
         targetSdk = 35
-        versionCode = 20
-        versionName = "1.1.8"
+        versionCode = 21
+        versionName = "1.1.9"
 
         vectorDrawables {
             useSupportLibrary = true

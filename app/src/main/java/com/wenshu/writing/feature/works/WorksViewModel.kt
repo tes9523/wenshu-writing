@@ -1,6 +1,8 @@
 package com.wenshu.writing.feature.works
 
 import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -13,8 +15,10 @@ import com.wenshu.writing.domain.model.Chapter
 import com.wenshu.writing.domain.model.Novel
 import com.wenshu.writing.ui.util.ExternalStorage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -23,7 +27,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.io.InputStream
 import java.io.OutputStream
 
 data class WorksUiState(
@@ -122,39 +125,75 @@ class WorksViewModel(
         }
     }
 
-    /** 导入整书数据包：所有数据自动归属新书稿 bookId。 */
-    fun importBook(
-        input: InputStream,
-        onResult: (Result<Long>) -> Unit
-    ) {
+    private val _importProgress = MutableStateFlow<ImportProgress?>(null)
+    /** 非空 = 正在导入，驱动进度弹窗。 */
+    val importProgress: StateFlow<ImportProgress?> = _importProgress.asStateFlow()
+
+    private val _importResult = MutableStateFlow<Result<ImportSummary>?>(null)
+    /** 一次性导入结果：成功（书名/章节数/编码）或失败（精准原因）。 */
+    val importResult: StateFlow<Result<ImportSummary>?> = _importResult.asStateFlow()
+
+    fun clearImportResult() {
+        _importResult.value = null
+    }
+
+    /**
+     * 导入本地小说文档（TXT / MD / DOCX）：
+     * 读取文件 → 编码解析 → 智能分章 → 写入书稿，全程上报进度。
+     */
+    fun importNovelDocument(context: Context, uri: Uri) {
+        if (_importProgress.value != null) return
         viewModelScope.launch {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
-                    val data = BookArchive.read(input)
-                    val novelId = repository.createNovel(data.novel.title, data.novel.description)
-                    data.chapters.sortedBy { it.orderIndex }.forEach { chapter ->
+                    val fileName = displayName(context, uri) ?: "未命名.txt"
+                    _importProgress.value = ImportProgress(fileName, ImportStage.READING, 0.05f)
+                    val bytes = runCatching {
+                        context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    }.getOrNull() ?: throw ImportException("无法读取文件，请重新选择")
+                    if (bytes.isEmpty()) throw ImportException("文件为空，未读取到任何内容")
+
+                    _importProgress.value = ImportProgress(fileName, ImportStage.DECODING, 0.35f)
+                    val parsed = NovelImporter.parse(fileName, bytes)
+
+                    _importProgress.value = ImportProgress(fileName, ImportStage.SPLITTING, 0.55f)
+                    val novelId = repository.createNovel(
+                        parsed.title,
+                        "导入自 ${parsed.formatName} 文档（${parsed.encoding}）"
+                    )
+                    parsed.chapters.forEachIndexed { index, chapter ->
                         val id = repository.createChapter(novelId, chapter.title)
                         if (chapter.content.isNotBlank()) {
                             repository.saveChapter(id, chapter.title, chapter.content)
                         }
-                    }
-                    data.settings.forEach {
-                        settingRepository.addSetting(
-                            category = it.category,
-                            title = it.title,
-                            subtitle = it.subtitle,
-                            content = it.content,
-                            bookId = novelId
+                        _importProgress.value = ImportProgress(
+                            fileName,
+                            ImportStage.SAVING,
+                            0.55f + 0.45f * (index + 1) / parsed.chapters.size
                         )
                     }
-                    memoRepository.addNotes(data.memos, novelId)
                     preferencesRepository.setActiveNovel(novelId)
-                    novelId
+                    _importProgress.value = ImportProgress(fileName, ImportStage.DONE, 1f)
+                    ImportSummary(
+                        novelId = novelId,
+                        title = parsed.title,
+                        chapterCount = parsed.chapters.size,
+                        encoding = parsed.encoding,
+                        formatName = parsed.formatName,
+                        singleChapter = parsed.singleChapter
+                    )
                 }
             }
-            onResult(result)
+            _importProgress.value = null
+            _importResult.value = result
         }
     }
+
+    private fun displayName(context: Context, uri: Uri): String? = runCatching {
+        context.contentResolver.query(
+            uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
+        )?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+    }.getOrNull()
 
     companion object {
         fun factory(
@@ -174,6 +213,31 @@ class WorksViewModel(
         }
     }
 }
+
+/** 导入进度阶段。 */
+enum class ImportStage(val label: String) {
+    READING("读取文件"),
+    DECODING("编码解析"),
+    SPLITTING("文本分章"),
+    SAVING("写入书稿"),
+    DONE("导入完成")
+}
+
+data class ImportProgress(
+    val fileName: String,
+    val stage: ImportStage,
+    val percent: Float
+)
+
+data class ImportSummary(
+    val novelId: Long,
+    val title: String,
+    val chapterCount: Int,
+    val encoding: String,
+    val formatName: String,
+    /** 未识别到章节标题时整本归入单章「全文」。 */
+    val singleChapter: Boolean
+)
 
 data class ChapterListUiState(
     val novel: Novel? = null,

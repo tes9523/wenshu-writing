@@ -12,7 +12,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
 class SettingRepository(
-    private val settingDao: SettingDao
+    private val settingDao: SettingDao,
+    /** wenshu/setting 目录双向同步；为 null 时只做数据库存储。 */
+    private val fileSync: FileSyncManager? = null
 ) {
 
     fun observeCategories(bookId: Long?): Flow<List<String>> = settingDao.observeCategories(bookId)
@@ -39,7 +41,7 @@ class SettingRepository(
         subtitle: String? = null
     ): Long = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
-        settingDao.insert(
+        val id = settingDao.insert(
             SettingEntity(
                 bookId = bookId,
                 category = category,
@@ -50,6 +52,8 @@ class SettingRepository(
                 updatedAt = now
             )
         )
+        fileSync?.onSettingSaved(bookId, category, title, subtitle, content)
+        id
     }
 
     suspend fun addCharacter(name: String, role: String, description: String, bookId: Long?): Long =
@@ -80,20 +84,36 @@ class SettingRepository(
         )
 
     suspend fun update(setting: Setting) = withContext(Dispatchers.IO) {
+        val old = settingDao.getById(setting.id)
         settingDao.update(setting.copy(updatedAt = System.currentTimeMillis()).toEntity())
+        fileSync?.onSettingSaved(
+            bookId = setting.bookId,
+            category = setting.category,
+            title = setting.title,
+            subtitle = setting.subtitle,
+            content = setting.content,
+            oldCategory = old?.category,
+            oldTitle = old?.title
+        )
     }
 
     suspend fun delete(setting: Setting) = withContext(Dispatchers.IO) {
         settingDao.delete(setting.toEntity())
+        fileSync?.onSettingDeleted(setting.bookId, setting.category, setting.title)
     }
 
     suspend fun deleteById(id: Long) = withContext(Dispatchers.IO) {
+        val old = settingDao.getById(id)
         settingDao.deleteById(id)
+        if (old != null) {
+            fileSync?.onSettingDeleted(old.bookId, old.category, old.title)
+        }
     }
 
     /** 删除本书某个分类下全部条目（自定义分类删除时使用）。 */
     suspend fun deleteByCategory(bookId: Long?, category: String) = withContext(Dispatchers.IO) {
         settingDao.deleteByCategory(bookId, category)
+        fileSync?.onCategoryDeleted(bookId, category)
     }
 
     /** 重命名分类：把本书该分类下所有条目的 category 改为新名称。 */
@@ -106,26 +126,29 @@ class SettingRepository(
             settingDao.getByCategory(bookId, oldCategory).forEach { entity ->
                 settingDao.update(entity.copy(category = trimmed, updatedAt = now))
             }
+            fileSync?.onCategoryRenamed(bookId, oldCategory, trimmed)
         }
 
     /** 整批替换某分类下的内容（流水线写大纲/人物/世界观时使用）。 */
     suspend fun replaceByCategory(bookId: Long?, category: String, items: List<Setting>) =
         withContext(Dispatchers.IO) {
             settingDao.deleteByCategory(bookId, category)
-            if (items.isEmpty()) return@withContext
             val now = System.currentTimeMillis()
-            settingDao.insertAll(
-                items.map { setting ->
-                    SettingEntity(
-                        bookId = bookId,
-                        category = category,
-                        title = setting.title,
-                        subtitle = setting.subtitle,
-                        content = setting.content,
-                        createdAt = now,
-                        updatedAt = now
-                    )
-                }
-            )
+            if (items.isNotEmpty()) {
+                settingDao.insertAll(
+                    items.map { setting ->
+                        SettingEntity(
+                            bookId = bookId,
+                            category = category,
+                            title = setting.title,
+                            subtitle = setting.subtitle,
+                            content = setting.content,
+                            createdAt = now,
+                            updatedAt = now
+                        )
+                    }
+                )
+            }
+            fileSync?.onCategoryReplaced(bookId, category, items)
         }
 }
